@@ -1,0 +1,21 @@
+# Zig
+.zig-cache/
+zig-out/
+
+# Frontend
+frontend/node_modules/
+
+# Build output
+ui/
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# Editor / IDE
+.claude/
+.agents/
+
+# OS
+.DS_Store
