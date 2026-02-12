@@ -9,6 +9,7 @@ import { WebTerminal } from "./web-terminal"
 import { ServiceManager } from "./service-manager"
 import { ProcessExplorer } from "./process-explorer"
 import { LogViewer } from "./log-viewer"
+import { SecurityPosture } from "./security-posture"
 import type { NodeStatus, Capabilities } from "@/lib/api"
 import { deployStep, updateNodeTags, fetchAllTags } from "@/lib/api"
 import {
@@ -32,6 +33,7 @@ import {
   ScrollText,
   Cog,
   Tag,
+  Shield,
 } from "lucide-react"
 
 interface NodeDetailProps {
@@ -51,6 +53,7 @@ export function NodeDetail({ node, onClose, onRemove, onTagsChanged, capabilitie
   const [showServices, setShowServices] = useState(false)
   const [showProcesses, setShowProcesses] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
+  const [showSecurity, setShowSecurity] = useState(false)
 
   const cpuHistory = history.map((h) => h.cpu.usage_percent)
   const memHistory = history.map((h) => h.memory.used_percent)
@@ -113,6 +116,15 @@ export function NodeDetail({ node, onClose, onRemove, onTagsChanged, capabilitie
               title="Services"
             >
               <Cog className="w-4 h-4" />
+            </button>
+          )}
+          {capabilities?.security && node.connected && (
+            <button
+              onClick={() => setShowSecurity(true)}
+              className="p-2 rounded-lg hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors"
+              title="Security Posture"
+            >
+              <Shield className="w-4 h-4" />
             </button>
           )}
           {node.connected && (
@@ -331,6 +343,14 @@ export function NodeDetail({ node, onClose, onRemove, onTagsChanged, capabilitie
           nodeId={nodeId}
           nodeName={node.name}
           onClose={() => setShowLogs(false)}
+        />
+      )}
+
+      {showSecurity && (
+        <SecurityPosture
+          nodeId={nodeId}
+          nodeName={node.name}
+          onClose={() => setShowSecurity(false)}
         />
       )}
 

@@ -7,7 +7,7 @@
 <p align="center">
   <em>A lightweight server monitoring & orchestration platform built in Zig.<br/>
   Deploy zero-dependency agents to your Linux fleet, collect real-time telemetry over WebSockets,<br/>
-  tag and group nodes, open interactive SSH terminals, run fleet-wide commands, manage packages and systemd services, explore processes with kill signals, stream logs in real time, execute Ansible playbooks, detect configuration drift, and export Prometheus metrics — all from a single binary and a clean React dashboard.</em>
+  tag and group nodes, open interactive SSH terminals, run fleet-wide commands, manage packages and systemd services, explore processes with kill signals, stream logs in real time, audit security posture with scoring, execute Ansible playbooks, detect configuration drift, and export Prometheus metrics — all from a single binary and a clean React dashboard.</em>
 </p>
 
 <p align="center">
@@ -42,6 +42,7 @@ Every component draws from David Bowie's *Space Oddity* and *Ziggy Stardust* myt
 | Service Manager | **Life on Mars** | Remote systemd service viewer and controller | *"Is there life on Mars?"* |
 | Process Explorer | **Ashes to Ashes** | Browser-based process viewer with kill signals | *"Ashes to ashes, funk to funky"* |
 | Log Streaming | **Sound and Vision** | Real-time log tailing (journalctl & files) | *"Don't you wonder sometimes, 'bout sound and vision?"* |
+| Security Posture | **Heroes** | Per-node security audit with scoring | *"We can be heroes, just for one day"* |
 | Ansible | **Ziggy** | Optional Ansible orchestration engine | *"Ziggy played guitar"* |
 
 ---
@@ -64,6 +65,7 @@ Every component draws from David Bowie's *Space Oddity* and *Ziggy Stardust* myt
                     │                  │──── SSH (Life on Mars)─►  │              │
                     │                  │──── SSH (Ashes) ───────►  │              │
                     │                  │──── SSH (Sound&Vision)─►  │              │
+                    │                  │──── SSH (Heroes) ──────►  │              │
                     └────────┬─────────┘                             └─────────────┘
                              │
                     ┌────────▼─────────┐       ┌─────────────────┐
@@ -177,6 +179,17 @@ Spiders auto-detect and report: **OS** (name, version, ID), **kernel**, **archit
 - **1MB buffer cap** — Server truncates old lines from the front at clean newline boundaries to prevent unbounded memory growth
 - **Input validation** — Service names validated against `[a-zA-Z0-9._@-]`; file paths must start with `/` and reject shell metacharacters
 - **Sudo support** — All commands wrapped with sudo for privileged journal entries and root-owned log files
+
+### Security Posture (Heroes)
+
+- **Per-node security score** — Automated 0–100 score computed from package updates, SSH hardening, firewall status, and auto-update configuration
+- **Upgradable packages** — Lists all packages with available updates, showing current and available versions (apt, dnf, pacman, apk)
+- **SSH config audit** — Checks six critical sshd settings: PasswordAuthentication, PermitRootLogin, PubkeyAuthentication, X11Forwarding, PermitEmptyPasswords, and MaxAuthTries — each graded pass/warn/fail
+- **Firewall detection** — Auto-detects ufw, firewalld, or iptables; shows active/inactive status and raw rules
+- **Open ports** — Lists all listening TCP ports with process names from `ss -tlnp`
+- **Auto-update status** — Detects whether unattended-upgrades (Debian/Ubuntu) or dnf-automatic (RHEL/Fedora) is installed and enabled
+- **Overview dashboard** — Score ring visualization, clickable summary cards for each category, and port badges
+- **Tabbed detail views** — Packages table, SSH config cards with status badges, firewall rules display, and auto-update configuration
 
 ### Ansible Integration (Ziggy)
 
@@ -511,6 +524,12 @@ Package actions: `check-updates`, `upgrade`, `full-upgrade`, `list-installed`, `
 | `GET` | `/api/logs/:id/poll?job=ID&offset=N` | Poll log output, returns `{output, offset, done, ok}` |
 | `POST` | `/api/logs/:id/stop` | Stop log stream `{job_id}` |
 
+### Security Posture (Heroes)
+
+| Method | Endpoint | Description |
+|:-------|:---------|:------------|
+| `GET` | `/api/security/:id/scan` | Run security scan, returns `{ok, score, upgradable, ssh_config, ports, firewall, autoupdate}` |
+
 ### Drift Detection
 
 | Method | Endpoint | Description |
@@ -526,7 +545,7 @@ Package actions: `check-updates`, `upgrade`, `full-upgrade`, `list-installed`, `
 
 | Method | Endpoint | Description |
 |:-------|:---------|:------------|
-| `GET` | `/api/capabilities` | Server feature flags (ansible, deployer, auth, fleet, services, processes, drift, logs) |
+| `GET` | `/api/capabilities` | Server feature flags (ansible, deployer, auth, fleet, services, processes, drift, logs, security) |
 | `GET` | `/api/ansible/status` | Ansible version and availability |
 | `POST` | `/api/ansible/run` | Run playbook `{playbook, nodes?, requirements?}` |
 | `POST` | `/api/ansible/poll?job=ID&offset=N` | Poll playbook output |
@@ -595,6 +614,7 @@ stardust/
 │   │   ├── services.zig      # Life on Mars (service manager)
 │   │   ├── processes.zig     # Ashes to Ashes (process explorer)
 │   │   ├── logs.zig          # Sound and Vision (log streaming)
+│   │   ├── security.zig     # Heroes (security posture scanner)
 │   │   ├── drift.zig         # Drift detection (SSH snapshots & parsing)
 │   │   └── ansible.zig       # Ziggy (Ansible integration)
 │   ├── agent/
@@ -624,6 +644,7 @@ stardust/
 │       │   ├── service-manager.tsx  # Service viewer/controller (Life on Mars)
 │       │   ├── process-explorer.tsx # Process viewer/killer (Ashes to Ashes)
 │       │   ├── log-viewer.tsx     # Log streamer (Sound and Vision)
+│       │   ├── security-posture.tsx # Security scanner (Heroes)
 │       │   ├── ansible-modal.tsx   # Playbook runner
 │       │   ├── login-page.tsx
 │       │   └── profile-modal.tsx

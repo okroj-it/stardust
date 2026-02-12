@@ -14,6 +14,7 @@ const ServiceEngine = @import("services.zig").ServiceEngine;
 const ProcessEngine = @import("processes.zig").ProcessEngine;
 const LogEngine = @import("logs.zig").LogEngine;
 const DriftEngine = @import("drift.zig").DriftEngine;
+const SecurityEngine = @import("security.zig").SecurityEngine;
 const terminal_handler = @import("terminal_handler.zig");
 const embedded_ui = @import("embedded_ui");
 
@@ -206,6 +207,15 @@ pub fn main() !void {
         }
     }
 
+    // Init security posture engine (requires crypto + db)
+    var security: ?SecurityEngine = null;
+    if (crypto_engine) |*ce| {
+        if (db) |*d| {
+            security = SecurityEngine.init(allocator, d, ce);
+            std.log.info("[HEROES] Security posture: enabled", .{});
+        }
+    }
+
     // Init auth (requires crypto + db)
     var auth: ?Auth = null;
     if (crypto_engine) |ce| {
@@ -264,6 +274,7 @@ pub fn main() !void {
     if (processes) |*p| global_api.setProcesses(p);
     if (logs) |*l| global_api.setLogs(l);
     if (drift) |*d| global_api.setDrift(d);
+    if (security) |*s| global_api.setSecurity(s);
     global_api.setWsState(&ws_state);
 
     // Init WebSocket settings

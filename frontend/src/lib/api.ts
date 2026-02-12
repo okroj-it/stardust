@@ -350,11 +350,12 @@ export interface Capabilities {
   processes: boolean
   logs: boolean
   drift: boolean
+  security: boolean
 }
 
 export async function fetchCapabilities(): Promise<Capabilities> {
   const res = await apiFetch(`${BASE}/api/capabilities`)
-  if (!res.ok) return { deployer: false, auth: false, ansible: false, fleet: false, services: false, processes: false, logs: false, drift: false }
+  if (!res.ok) return { deployer: false, auth: false, ansible: false, fleet: false, services: false, processes: false, logs: false, drift: false, security: false }
   return res.json()
 }
 
@@ -767,4 +768,26 @@ export async function stopLogStream(nodeId: string, jobId: string): Promise<void
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ job_id: jobId }),
   })
+}
+
+// --- Security Posture ---
+
+export interface SecurityScanResult {
+  ok: boolean
+  score: number
+  upgradable: Array<{ name: string; current: string; available: string }>
+  ssh_config: Array<{ key: string; value: string; status: 'pass' | 'warn' | 'fail'; detail: string }>
+  ports: Array<{ proto: string; address: string; port: string; process: string }>
+  firewall: { active: boolean; type: string; rules: string }
+  autoupdate: { enabled: boolean; package: string; detail: string }
+  error?: string
+}
+
+export async function securityScan(nodeId: string): Promise<SecurityScanResult> {
+  const res = await apiFetch(`${BASE}/api/security/${nodeId}/scan`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+  return res.json()
 }

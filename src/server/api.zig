@@ -17,6 +17,8 @@ const ProcessEngine = process_mod.ProcessEngine;
 const log_mod = @import("logs.zig");
 const LogEngine = log_mod.LogEngine;
 const DriftEngine = @import("drift.zig").DriftEngine;
+const security_mod = @import("security.zig");
+const SecurityEngine = security_mod.SecurityEngine;
 const common = @import("common");
 
 pub const Api = struct {
@@ -33,6 +35,7 @@ pub const Api = struct {
     processes: ?*ProcessEngine = null,
     logs: ?*LogEngine = null,
     drift: ?*DriftEngine = null,
+    security: ?*SecurityEngine = null,
 
     pub fn init(allocator: std.mem.Allocator, store: *Store) Api {
         return .{
@@ -87,6 +90,10 @@ pub const Api = struct {
 
     pub fn setDrift(self: *Api, d: *DriftEngine) void {
         self.drift = d;
+    }
+
+    pub fn setSecurity(self: *Api, s: *SecurityEngine) void {
+        self.security = s;
     }
 
     pub fn handleRequest(self: *Api, r: zap.Request) !void {
@@ -167,6 +174,8 @@ pub const Api = struct {
             try self.handleLogs(r, path);
         } else if (std.mem.startsWith(u8, path, "/api/drift/")) {
             try self.handleDrift(r, path);
+        } else if (std.mem.startsWith(u8, path, "/api/security/")) {
+            try self.handleSecurity(r, path);
         } else {
             return; // Let static file handler deal with it
         }
@@ -1231,7 +1240,7 @@ pub const Api = struct {
         defer if (ansible_ver != null) self.allocator.free(ver_json);
 
         const resp = std.fmt.allocPrint(self.allocator,
-            \\{{"deployer":{s},"auth":{s},"ansible":{s},"ansible_version":{s},"fleet":{s},"services":{s},"processes":{s},"logs":{s},"drift":{s}}}
+            \\{{"deployer":{s},"auth":{s},"ansible":{s},"ansible_version":{s},"fleet":{s},"services":{s},"processes":{s},"logs":{s},"drift":{s},"security":{s}}}
         , .{
             if (self.deployer != null) "true" else "false",
             if (self.auth != null) "true" else "false",
@@ -1242,6 +1251,7 @@ pub const Api = struct {
             if (self.processes != null) "true" else "false",
             if (self.logs != null) "true" else "false",
             if (self.drift != null) "true" else "false",
+            if (self.security != null) "true" else "false",
         }) catch {
             r.setStatus(.internal_server_error);
             try r.sendJson("{\"error\":\"response serialization failed\"}");
@@ -2319,6 +2329,77 @@ pub const Api = struct {
             svc_diff,
             port_diff,
             user_diff,
+        }) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"allocation failed\"}");
+            return;
+        };
+        defer self.allocator.free(resp);
+        try r.sendJson(resp);
+    }
+
+    // --- Security Posture ---
+
+    fn handleSecurity(self: *Api, r: zap.Request, path: []const u8) !void {
+        const engine = self.security orelse {
+            r.setStatus(.service_unavailable);
+            try r.sendJson("{\"error\":\"security engine not available\"}");
+            return;
+        };
+
+        if (r.methodAsEnum() != .GET) {
+            r.setStatus(.method_not_allowed);
+            try r.sendJson("{\"error\":\"method not allowed\"}");
+            return;
+        }
+
+        // Extract node_id from /api/security/:node_id/scan
+        const prefix = "/api/security/";
+        if (path.len <= prefix.len) {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"missing node_id\"}");
+            return;
+        }
+        const rest = path[prefix.len..];
+        const slash_idx = std.mem.indexOfScalar(u8, rest, '/') orelse {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"invalid path\"}");
+            return;
+        };
+        const node_id = rest[0..slash_idx];
+        const action = rest[slash_idx + 1 ..];
+
+        if (!std.mem.eql(u8, action, "scan")) {
+            r.setStatus(.not_found);
+            try r.sendJson("{\"error\":\"unknown action\"}");
+            return;
+        }
+
+        const result = engine.scanNode(node_id);
+        defer result.deinit(self.allocator);
+
+        if (!result.ok) {
+            r.setStatus(.internal_server_error);
+            const err_resp = std.fmt.allocPrint(self.allocator, "{{\"ok\":false,\"error\":{s}}}", .{
+                if (result.err_msg) |m| m else "\"scan failed\"",
+            }) catch {
+                try r.sendJson("{\"ok\":false,\"error\":\"scan failed\"}");
+                return;
+            };
+            defer self.allocator.free(err_resp);
+            try r.sendJson(err_resp);
+            return;
+        }
+
+        const resp = std.fmt.allocPrint(self.allocator,
+            \\{{"ok":true,"score":{d},"upgradable":{s},"ssh_config":{s},"ports":{s},"firewall":{s},"autoupdate":{s}}}
+        , .{
+            result.score,
+            result.upgradable_json orelse "[]",
+            result.ssh_config_json orelse "[]",
+            result.ports_json orelse "[]",
+            result.firewall_json orelse "{}",
+            result.autoupdate_json orelse "{}",
         }) catch {
             r.setStatus(.internal_server_error);
             try r.sendJson("{\"error\":\"allocation failed\"}");
