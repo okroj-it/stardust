@@ -9,6 +9,9 @@ const Auth = @import("auth.zig").Auth;
 const WsState = @import("ws_handler.zig").WsState;
 const AnsibleEngine = @import("ansible.zig").AnsibleEngine;
 const FleetEngine = @import("fleet.zig").FleetEngine;
+const service_mod = @import("services.zig");
+const ServiceEngine = service_mod.ServiceEngine;
+const ServiceScope = service_mod.ServiceScope;
 
 pub const Api = struct {
     allocator: std.mem.Allocator,
@@ -20,6 +23,7 @@ pub const Api = struct {
     ws_state: ?*WsState = null,
     ansible: ?*AnsibleEngine = null,
     fleet: ?*FleetEngine = null,
+    services: ?*ServiceEngine = null,
 
     pub fn init(allocator: std.mem.Allocator, store: *Store) Api {
         return .{
@@ -58,6 +62,10 @@ pub const Api = struct {
 
     pub fn setFleet(self: *Api, f: *FleetEngine) void {
         self.fleet = f;
+    }
+
+    pub fn setServices(self: *Api, s: *ServiceEngine) void {
+        self.services = s;
     }
 
     pub fn handleRequest(self: *Api, r: zap.Request) !void {
@@ -124,6 +132,8 @@ pub const Api = struct {
             try self.handleAnsible(r, path);
         } else if (std.mem.startsWith(u8, path, "/api/fleet/")) {
             try self.handleFleet(r, path);
+        } else if (std.mem.startsWith(u8, path, "/api/services/")) {
+            try self.handleServices(r, path);
         } else {
             return; // Let static file handler deal with it
         }
@@ -939,13 +949,14 @@ pub const Api = struct {
         defer if (ansible_ver != null) self.allocator.free(ver_json);
 
         const resp = std.fmt.allocPrint(self.allocator,
-            \\{{"deployer":{s},"auth":{s},"ansible":{s},"ansible_version":{s},"fleet":{s}}}
+            \\{{"deployer":{s},"auth":{s},"ansible":{s},"ansible_version":{s},"fleet":{s},"services":{s}}}
         , .{
             if (self.deployer != null) "true" else "false",
             if (self.auth != null) "true" else "false",
             if (self.ansible != null) "true" else "false",
             ver_json,
             if (self.fleet != null) "true" else "false",
+            if (self.services != null) "true" else "false",
         }) catch {
             r.setStatus(.internal_server_error);
             try r.sendJson("{\"error\":\"response serialization failed\"}");
@@ -1244,6 +1255,156 @@ pub const Api = struct {
             fleet.removeJob(job_id);
         }
     }
+
+    // --- Services (Life on Mars) ---
+
+    fn handleServices(self: *Api, r: zap.Request, path: []const u8) !void {
+        const engine = self.services orelse {
+            r.setStatus(.service_unavailable);
+            try r.sendJson("{\"error\":\"service manager not available\"}");
+            return;
+        };
+
+        // Path: /api/services/<node_id>/<action>
+        const after = path["/api/services/".len..];
+        const slash_pos = std.mem.indexOf(u8, after, "/");
+        if (slash_pos == null) {
+            r.setStatus(.not_found);
+            try r.sendJson("{\"error\":\"missing sub-path\"}");
+            return;
+        }
+        const node_id = after[0..slash_pos.?];
+        const rest = after[slash_pos.?..];
+
+        if (std.mem.eql(u8, rest, "/list")) {
+            try self.handleServiceList(r, engine, node_id);
+        } else if (std.mem.eql(u8, rest, "/status")) {
+            try self.handleServiceStatus(r, engine, node_id);
+        } else if (std.mem.eql(u8, rest, "/action")) {
+            try self.handleServiceAction(r, engine, node_id);
+        } else {
+            r.setStatus(.not_found);
+            try r.sendJson("{\"error\":\"not found\"}");
+        }
+    }
+
+    fn handleServiceList(self: *Api, r: zap.Request, engine: *ServiceEngine, node_id: []const u8) !void {
+        if (r.methodAsEnum() != .GET) {
+            r.setStatus(.method_not_allowed);
+            try r.sendJson("{\"error\":\"method not allowed\"}");
+            return;
+        }
+
+        const scope_str = r.getParamSlice("scope") orelse "system";
+        const scope = ServiceScope.fromString(scope_str);
+
+        const result = engine.listServices(node_id, scope);
+        defer if (result.output.len > 0) self.allocator.free(result.output);
+
+        const escaped = jsonEscape(self.allocator, result.output) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(escaped);
+
+        const resp = std.fmt.allocPrint(self.allocator,
+            \\{{"ok":{s},"output":"{s}"}}
+        , .{
+            if (result.ok) "true" else "false",
+            escaped,
+        }) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(resp);
+        try r.sendJson(resp);
+    }
+
+    fn handleServiceStatus(self: *Api, r: zap.Request, engine: *ServiceEngine, node_id: []const u8) !void {
+        if (r.methodAsEnum() != .GET) {
+            r.setStatus(.method_not_allowed);
+            try r.sendJson("{\"error\":\"method not allowed\"}");
+            return;
+        }
+
+        const name = r.getParamSlice("name") orelse {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"missing name parameter\"}");
+            return;
+        };
+        const scope_str = r.getParamSlice("scope") orelse "system";
+        const scope = ServiceScope.fromString(scope_str);
+
+        const result = engine.serviceStatus(node_id, name, scope);
+        defer if (result.output.len > 0) self.allocator.free(result.output);
+
+        const escaped = jsonEscape(self.allocator, result.output) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(escaped);
+
+        const resp = std.fmt.allocPrint(self.allocator,
+            \\{{"ok":{s},"output":"{s}"}}
+        , .{
+            if (result.ok) "true" else "false",
+            escaped,
+        }) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(resp);
+        try r.sendJson(resp);
+    }
+
+    fn handleServiceAction(self: *Api, r: zap.Request, engine: *ServiceEngine, node_id: []const u8) !void {
+        if (r.methodAsEnum() != .POST) {
+            r.setStatus(.method_not_allowed);
+            try r.sendJson("{\"error\":\"method not allowed\"}");
+            return;
+        }
+
+        const body = r.body orelse {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"missing request body\"}");
+            return;
+        };
+        const parsed = std.json.parseFromSlice(ServiceActionRequest, self.allocator, body, .{ .ignore_unknown_fields = true }) catch {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"invalid JSON\"}");
+            return;
+        };
+        defer parsed.deinit();
+        const req = parsed.value;
+
+        const scope = ServiceScope.fromString(req.scope);
+        const result = engine.serviceAction(node_id, req.name, req.action, scope);
+        defer if (result.output.len > 0) self.allocator.free(result.output);
+
+        const escaped = jsonEscape(self.allocator, result.output) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(escaped);
+
+        const resp = std.fmt.allocPrint(self.allocator,
+            \\{{"ok":{s},"output":"{s}"}}
+        , .{
+            if (result.ok) "true" else "false",
+            escaped,
+        }) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(resp);
+        try r.sendJson(resp);
+    }
 };
 
 const AnsibleRunRequest = struct {
@@ -1299,6 +1460,14 @@ const FleetPollRequest = struct {
         node_id: []const u8,
         offset: usize = 0,
     };
+};
+
+// --- Service Manager ---
+
+const ServiceActionRequest = struct {
+    name: []const u8,
+    action: []const u8,
+    scope: []const u8 = "system",
 };
 
 /// Escape a string for embedding inside a JSON string (between quotes).

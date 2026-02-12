@@ -10,6 +10,7 @@ const Deployer = @import("deployer.zig").Deployer;
 const Auth = @import("auth.zig").Auth;
 const AnsibleEngine = @import("ansible.zig").AnsibleEngine;
 const FleetEngine = @import("fleet.zig").FleetEngine;
+const ServiceEngine = @import("services.zig").ServiceEngine;
 const terminal_handler = @import("terminal_handler.zig");
 const embedded_ui = @import("embedded_ui");
 
@@ -166,6 +167,15 @@ pub fn main() !void {
         }
     }
 
+    // Init service manager (requires crypto + db)
+    var services: ?ServiceEngine = null;
+    if (crypto_engine) |*ce| {
+        if (db) |*d| {
+            services = ServiceEngine.init(allocator, d, ce);
+            std.log.info("[LIFE ON MARS] Service manager: enabled", .{});
+        }
+    }
+
     // Init auth (requires crypto + db)
     var auth: ?Auth = null;
     if (crypto_engine) |ce| {
@@ -220,6 +230,7 @@ pub fn main() !void {
     if (auth) |*a| global_api.setAuth(a);
     if (ansible) |*a| global_api.setAnsible(a);
     if (fleet) |*f| global_api.setFleet(f);
+    if (services) |*s| global_api.setServices(s);
     global_api.setWsState(&ws_state);
 
     // Init WebSocket settings

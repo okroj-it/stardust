@@ -324,11 +324,12 @@ export interface Capabilities {
   ansible: boolean
   ansible_version?: string | null
   fleet: boolean
+  services: boolean
 }
 
 export async function fetchCapabilities(): Promise<Capabilities> {
   const res = await apiFetch(`${BASE}/api/capabilities`)
-  if (!res.ok) return { deployer: false, auth: false, ansible: false, fleet: false }
+  if (!res.ok) return { deployer: false, auth: false, ansible: false, fleet: false, services: false }
   return res.json()
 }
 
@@ -444,4 +445,73 @@ export async function fleetPoll(jobId: string, offsets: Record<string, number>):
     throw new Error(err.error || `HTTP ${res.status}`)
   }
   return res.json()
+}
+
+// --- Service Manager ---
+
+export type ServiceScope = 'system' | 'user'
+export type ServiceAction = 'start' | 'stop' | 'restart' | 'enable' | 'disable'
+
+export interface ServiceInfo {
+  name: string
+  load: string
+  active: string
+  sub: string
+  description: string
+}
+
+export interface ServiceResult {
+  ok: boolean
+  output: string
+}
+
+export async function fetchServiceList(nodeId: string, scope: ServiceScope): Promise<ServiceResult> {
+  const res = await apiFetch(`${BASE}/api/services/${nodeId}/list?scope=${scope}`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function fetchServiceStatus(nodeId: string, name: string, scope: ServiceScope): Promise<ServiceResult> {
+  const res = await apiFetch(`${BASE}/api/services/${nodeId}/status?name=${encodeURIComponent(name)}&scope=${scope}`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function runServiceAction(nodeId: string, name: string, action: ServiceAction, scope: ServiceScope): Promise<ServiceResult> {
+  const res = await apiFetch(`${BASE}/api/services/${nodeId}/action`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, action, scope }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export function parseServiceList(output: string): ServiceInfo[] {
+  const services: ServiceInfo[] = []
+  for (const line of output.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    // systemctl --plain --no-legend: "name.service  loaded  active  sub  description..."
+    const parts = trimmed.split(/\s+/)
+    if (parts.length >= 4) {
+      services.push({
+        name: parts[0],
+        load: parts[1],
+        active: parts[2],
+        sub: parts[3],
+        description: parts.slice(4).join(' '),
+      })
+    }
+  }
+  return services
 }

@@ -7,7 +7,7 @@
 <p align="center">
   <em>A lightweight server monitoring & orchestration platform built in Zig.<br/>
   Deploy zero-dependency agents to your Linux fleet, collect real-time telemetry over WebSockets,<br/>
-  open interactive SSH terminals, run fleet-wide commands, manage packages, and execute Ansible playbooks — all from a single binary and a clean React dashboard.</em>
+  open interactive SSH terminals, run fleet-wide commands, manage packages and systemd services, and execute Ansible playbooks — all from a single binary and a clean React dashboard.</em>
 </p>
 
 <p align="center">
@@ -38,6 +38,7 @@ Every component draws from David Bowie's *Space Oddity* and *Ziggy Stardust* myt
 | Deployer | **Major Tom** | SSH-based agent deployment & lifecycle manager | *"Commencing countdown, engines on"* |
 | Web Terminal | **Space Oddity** | Browser-based SSH terminal via PTY relay | *"Here am I floating round my tin can"* |
 | Fleet Command | **Starman** | Parallel ad-hoc command execution across nodes | *"There's a starman waiting in the sky"* |
+| Service Manager | **Life on Mars** | Remote systemd service viewer and controller | *"Is there life on Mars?"* |
 | Ansible | **Ziggy** | Optional Ansible orchestration engine | *"Ziggy played guitar"* |
 
 ---
@@ -57,6 +58,7 @@ Every component draws from David Bowie's *Space Oddity* and *Ziggy Stardust* myt
                     │                  │──── SSH (Major Tom) ────►  │  zero-dep    │
                     │                  │──── SSH PTY (Oddity) ───►  │              │
                     │                  │──── SSH (Starman) ────►  │              │
+                    │                  │──── SSH (Life on Mars)─►  │              │
                     └────────┬─────────┘                             └─────────────┘
                              │
                     ┌────────▼─────────┐       ┌─────────────────┐
@@ -71,6 +73,8 @@ Ground Control is a **single Zig binary** that serves the embedded React fronten
 Spiders are **statically-linked, zero-dependency** Zig binaries that run on any Linux box. They collect system telemetry and stream it back to Ground Control in real time.
 
 **Starman** lets you run ad-hoc shell commands across your entire fleet in parallel — type `uptime`, select your nodes, and watch output stream in from every machine at once.
+
+**Life on Mars** gives you a per-node view of systemd services — both system-wide and user-scoped — with one-click start, stop, restart, enable, and disable actions, all without opening a terminal.
 
 When Ansible is detected on the host, **Ziggy** lights up — generating dynamic inventories from your node database and letting you run playbooks across your fleet with streaming output, all from The Capsule.
 
@@ -129,6 +133,16 @@ Spiders auto-detect and report: **OS** (name, version, ID), **kernel**, **archit
 - **Per-node panels** — Collapsible output sections with status indicators (running/success/error) per node
 - **Command history** — Last 10 commands saved in browser localStorage with dropdown recall
 - **Secure execution** — SSH keys decrypted to temporary files (mode `0600`), cleaned up after execution; passwords zeroed in memory
+
+### Service Manager (Life on Mars)
+
+- **System & user scopes** — Toggle between `systemctl` (system services) and `systemctl --user` (user services) with a single click
+- **Service listing** — View all services with color-coded state indicators (running, exited, failed, dead)
+- **Quick actions** — Start, stop, and restart services directly from the table row
+- **Detailed status** — Expand any service to see full `systemctl status` output with enable/disable controls
+- **Client-side filtering** — Instant search across service names and descriptions
+- **Secure execution** — System-scope commands use sudo with decrypted passwords; user-scope commands set `XDG_RUNTIME_DIR` for non-interactive SSH
+- **Input validation** — Service names are validated server-side to prevent shell injection
 
 ### Ansible Integration (Ziggy)
 
@@ -400,11 +414,19 @@ Package actions: `check-updates`, `upgrade`, `full-upgrade`
 | `POST` | `/api/fleet/run` | Start command `{command, node_ids, sudo?}`, returns `{job_id}` |
 | `POST` | `/api/fleet/poll?job=ID` | Poll output `{offsets: [{node_id, offset}, ...]}`, returns per-node results |
 
+### Services (Life on Mars)
+
+| Method | Endpoint | Description |
+|:-------|:---------|:------------|
+| `GET` | `/api/services/:id/list?scope=system\|user` | List all services on a node |
+| `GET` | `/api/services/:id/status?name=svc&scope=system\|user` | Detailed service status |
+| `POST` | `/api/services/:id/action` | Execute action `{name, action, scope}` (start/stop/restart/enable/disable) |
+
 ### Ansible
 
 | Method | Endpoint | Description |
 |:-------|:---------|:------------|
-| `GET` | `/api/capabilities` | Server feature flags (ansible, deployer, auth, fleet) |
+| `GET` | `/api/capabilities` | Server feature flags (ansible, deployer, auth, fleet, services) |
 | `GET` | `/api/ansible/status` | Ansible version and availability |
 | `POST` | `/api/ansible/run` | Run playbook `{playbook, nodes?, requirements?}` |
 | `POST` | `/api/ansible/poll?job=ID&offset=N` | Poll playbook output |
@@ -469,6 +491,7 @@ stardust/
 │   │   ├── deployer.zig      # Major Tom (SSH deployment)
 │   │   ├── terminal_handler.zig # Space Oddity (web terminal)
 │   │   ├── fleet.zig          # Starman (fleet command execution)
+│   │   ├── services.zig      # Life on Mars (service manager)
 │   │   └── ansible.zig       # Ziggy (Ansible integration)
 │   ├── agent/
 │   │   ├── main.zig          # Spider entry point
@@ -493,6 +516,7 @@ stardust/
 │       │   ├── terminal-modal.tsx  # Package management
 │       │   ├── web-terminal.tsx   # SSH terminal (Space Oddity)
 │       │   ├── fleet-command-modal.tsx # Fleet command runner (Starman)
+│       │   ├── service-manager.tsx  # Service viewer/controller (Life on Mars)
 │       │   ├── ansible-modal.tsx   # Playbook runner
 │       │   ├── login-page.tsx
 │       │   └── profile-modal.tsx

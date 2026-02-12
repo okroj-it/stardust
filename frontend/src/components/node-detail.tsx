@@ -6,7 +6,8 @@ import { CpuCores } from "./cpu-cores"
 import { MiniChart } from "./mini-chart"
 import { TerminalModal } from "./terminal-modal"
 import { WebTerminal } from "./web-terminal"
-import type { NodeStatus } from "@/lib/api"
+import { ServiceManager } from "./service-manager"
+import type { NodeStatus, Capabilities } from "@/lib/api"
 import { deployStep } from "@/lib/api"
 import {
   X,
@@ -26,20 +27,23 @@ import {
   Server,
   RotateCw,
   SquareTerminal,
+  Cog,
 } from "lucide-react"
 
 interface NodeDetailProps {
   node: NodeStatus
   onClose: () => void
   onRemove: () => void
+  capabilities?: Capabilities | null
 }
 
-export function NodeDetail({ node, onClose, onRemove }: NodeDetailProps) {
+export function NodeDetail({ node, onClose, onRemove, capabilities }: NodeDetailProps) {
   const nodeId = node.agent_id
   const { stats, history } = useNodeStats(nodeId, 5000)
   const [showTerminal, setShowTerminal] = useState(false)
   const [showShell, setShowShell] = useState(false)
   const [showReinstall, setShowReinstall] = useState(false)
+  const [showServices, setShowServices] = useState(false)
 
   const cpuHistory = history.map((h) => h.cpu.usage_percent)
   const memHistory = history.map((h) => h.memory.used_percent)
@@ -77,6 +81,15 @@ export function NodeDetail({ node, onClose, onRemove }: NodeDetailProps) {
           <p className="text-sm text-muted-foreground font-mono">{nodeId}</p>
         </div>
         <div className="flex items-center gap-1">
+          {capabilities?.services && node.connected && (
+            <button
+              onClick={() => setShowServices(true)}
+              className="p-2 rounded-lg hover:bg-violet-500/10 text-muted-foreground hover:text-violet-400 transition-colors"
+              title="Services"
+            >
+              <Cog className="w-4 h-4" />
+            </button>
+          )}
           {node.connected && (
             <button
               onClick={() => setShowShell(true)}
@@ -280,6 +293,14 @@ export function NodeDetail({ node, onClose, onRemove }: NodeDetailProps) {
           </InfoCard>
         )}
       </div>
+
+      {showServices && (
+        <ServiceManager
+          nodeId={nodeId}
+          nodeName={node.name}
+          onClose={() => setShowServices(false)}
+        />
+      )}
 
       {showShell && (
         <WebTerminal

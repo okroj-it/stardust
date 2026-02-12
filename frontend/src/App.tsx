@@ -182,6 +182,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
                 node={nodes.find(n => n.agent_id === selectedNode)!}
                 onClose={() => setSelectedNode(null)}
                 onRemove={() => setRemoveNode(selectedNode)}
+                capabilities={capabilities}
               />
             </div>
           )}
