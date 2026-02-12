@@ -7,7 +7,7 @@
 <p align="center">
   <em>A lightweight server monitoring & orchestration platform built in Zig.<br/>
   Deploy zero-dependency agents to your Linux fleet, collect real-time telemetry over WebSockets,<br/>
-  tag and group nodes, open interactive SSH terminals, run fleet-wide commands, manage packages and systemd services, and execute Ansible playbooks — all from a single binary and a clean React dashboard.</em>
+  tag and group nodes, open interactive SSH terminals, run fleet-wide commands, manage packages and systemd services, execute Ansible playbooks, and export Prometheus metrics — all from a single binary and a clean React dashboard.</em>
 </p>
 
 <p align="center">
@@ -17,6 +17,7 @@
   <img src="https://img.shields.io/badge/Tailwind-4.1-06b6d4?style=flat-square&logo=tailwindcss&logoColor=white" alt="Tailwind" />
   <img src="https://img.shields.io/badge/SQLite-3-003b57?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite" />
   <img src="https://img.shields.io/badge/Ansible-optional-ee0000?style=flat-square&logo=ansible&logoColor=white" alt="Ansible" />
+  <img src="https://img.shields.io/badge/Prometheus-compatible-e6522c?style=flat-square&logo=prometheus&logoColor=white" alt="Prometheus" />
   <img src="https://img.shields.io/badge/license-MIT-22c55e?style=flat-square" alt="MIT License" />
 </p>
 
@@ -171,6 +172,23 @@ Spiders auto-detect and report: **OS** (name, version, ID), **kernel**, **archit
 - **Tag-based targeting** — Fleet Command and Ansible modals let you select/deselect nodes by tag in one click
 - **Autocomplete** — Tag input suggests existing tags from across your fleet
 - **Clean lifecycle** — Tags are automatically removed when a node is deleted
+
+### Prometheus Metrics
+
+- **`GET /metrics`** — Unauthenticated endpoint exposing all node telemetry in [Prometheus text exposition format](https://prometheus.io/docs/instrumenting/exposition_formats/)
+- **Per-node labels** — Every metric carries `agent_id` and `hostname` labels; filesystem, network, disk I/O, and temperature metrics add `mountpoint`/`fstype`, `interface`, `device`, or `zone`
+- **30+ metric families** — CPU, memory, swap, load, filesystems, network I/O, connections, temperatures, disk I/O, uptime, and node availability (`stardust_up`)
+- **Zero config** — Scrape directly with Prometheus, pipe into Grafana dashboards, and set alerts on any metric
+- **Ready-made Grafana dashboard** — Import `grafana/stardust-fleet.json` for a full fleet overview with per-node filtering
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: stardust
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['your-stardust-host:8933']
+```
 
 ### Dashboard (The Capsule)
 
@@ -369,7 +387,7 @@ server {
 
 ## API Reference
 
-All endpoints (except health and login) require `Authorization: Bearer <token>`.
+All endpoints (except health, metrics, and login) require `Authorization: Bearer <token>`.
 
 ### Auth
 
@@ -445,6 +463,7 @@ Package actions: `check-updates`, `upgrade`, `full-upgrade`
 | Method | Endpoint | Description |
 |:-------|:---------|:------------|
 | `GET` | `/api/health` | Health check (no auth) |
+| `GET` | `/metrics` | Prometheus metrics (no auth) |
 
 ### WebSocket
 

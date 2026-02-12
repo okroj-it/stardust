@@ -1,0 +1,1196 @@
+{
+  "dashboard": {
+    "uid": "stardust-fleet",
+    "title": "Stardust Fleet Overview",
+    "description": "Orchestrating the Spiders from Mars — real-time fleet telemetry from Stardust agents",
+    "tags": ["stardust", "fleet", "infrastructure"],
+    "timezone": "browser",
+    "refresh": "15s",
+    "time": { "from": "now-1h", "to": "now" },
+    "schemaVersion": 39,
+    "fiscalYearStartMonth": 0,
+    "graphTooltip": 1,
+    "style": "dark",
+    "editable": true,
+    "liveNow": false,
+    "templating": {
+      "list": [
+        {
+          "name": "datasource",
+          "type": "datasource",
+          "query": "prometheus",
+          "current": {},
+          "hide": 0,
+          "includeAll": false,
+          "multi": false,
+          "options": [],
+          "refresh": 1,
+          "regex": "",
+          "skipUrlSync": false
+        },
+        {
+          "name": "hostname",
+          "type": "query",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "query": { "query": "label_values(stardust_up, hostname)", "refId": "hostname" },
+          "current": { "selected": true, "text": ["All"], "value": ["$__all"] },
+          "hide": 0,
+          "includeAll": true,
+          "multi": true,
+          "allValue": ".*",
+          "options": [],
+          "refresh": 2,
+          "regex": "",
+          "sort": 1,
+          "skipUrlSync": false
+        }
+      ]
+    },
+    "annotations": {
+      "list": [
+        {
+          "builtIn": 1,
+          "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+          "enable": true,
+          "hide": true,
+          "iconColor": "rgba(0, 211, 255, 1)",
+          "name": "Annotations & Alerts",
+          "type": "dashboard"
+        }
+      ]
+    },
+    "panels": [
+      {
+        "type": "row",
+        "title": "Fleet Status",
+        "collapsed": false,
+        "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 },
+        "id": 100
+      },
+      {
+        "id": 1,
+        "type": "stat",
+        "title": "Nodes Up",
+        "description": "Number of connected Spider agents",
+        "gridPos": { "x": 0, "y": 1, "w": 4, "h": 4 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "targets": [
+          {
+            "expr": "count(stardust_up{hostname=~\"$hostname\"} == 1)",
+            "legendFormat": "Up",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "value": null, "color": "red" },
+                { "value": 1, "color": "#8b5cf6" }
+              ]
+            },
+            "mappings": [],
+            "noValue": "0"
+          },
+          "overrides": []
+        },
+        "options": {
+          "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+          "orientation": "auto",
+          "textMode": "value_and_name",
+          "wideLayout": true,
+          "colorMode": "background",
+          "graphMode": "none",
+          "justifyMode": "auto"
+        }
+      },
+      {
+        "id": 2,
+        "type": "stat",
+        "title": "Avg CPU",
+        "description": "Average CPU usage across fleet",
+        "gridPos": { "x": 4, "y": 1, "w": 4, "h": 4 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "targets": [
+          {
+            "expr": "avg(stardust_cpu_usage_percent{hostname=~\"$hostname\"})",
+            "legendFormat": "CPU",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "decimals": 1,
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "value": null, "color": "green" },
+                { "value": 50, "color": "yellow" },
+                { "value": 80, "color": "orange" },
+                { "value": 90, "color": "red" }
+              ]
+            },
+            "min": 0,
+            "max": 100
+          },
+          "overrides": []
+        },
+        "options": {
+          "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+          "orientation": "auto",
+          "textMode": "value_and_name",
+          "colorMode": "background",
+          "graphMode": "area",
+          "justifyMode": "auto"
+        }
+      },
+      {
+        "id": 3,
+        "type": "stat",
+        "title": "Avg Memory",
+        "description": "Average memory usage across fleet",
+        "gridPos": { "x": 8, "y": 1, "w": 4, "h": 4 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "targets": [
+          {
+            "expr": "avg(stardust_memory_used_percent{hostname=~\"$hostname\"})",
+            "legendFormat": "Memory",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "decimals": 1,
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "value": null, "color": "green" },
+                { "value": 60, "color": "yellow" },
+                { "value": 80, "color": "orange" },
+                { "value": 90, "color": "red" }
+              ]
+            },
+            "min": 0,
+            "max": 100
+          },
+          "overrides": []
+        },
+        "options": {
+          "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+          "orientation": "auto",
+          "textMode": "value_and_name",
+          "colorMode": "background",
+          "graphMode": "area",
+          "justifyMode": "auto"
+        }
+      },
+      {
+        "id": 4,
+        "type": "stat",
+        "title": "Avg Load 1m",
+        "description": "Average 1-minute load average",
+        "gridPos": { "x": 12, "y": 1, "w": 4, "h": 4 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "targets": [
+          {
+            "expr": "avg(stardust_load_1m{hostname=~\"$hostname\"})",
+            "legendFormat": "Load",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "decimals": 2,
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "value": null, "color": "green" },
+                { "value": 2, "color": "yellow" },
+                { "value": 5, "color": "orange" },
+                { "value": 10, "color": "red" }
+              ]
+            }
+          },
+          "overrides": []
+        },
+        "options": {
+          "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+          "orientation": "auto",
+          "textMode": "value_and_name",
+          "colorMode": "background",
+          "graphMode": "area",
+          "justifyMode": "auto"
+        }
+      },
+      {
+        "id": 5,
+        "type": "stat",
+        "title": "Total Processes",
+        "description": "Sum of all processes across fleet",
+        "gridPos": { "x": 16, "y": 1, "w": 4, "h": 4 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "targets": [
+          {
+            "expr": "sum(stardust_processes_total{hostname=~\"$hostname\"})",
+            "legendFormat": "Processes",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "value": null, "color": "#8b5cf6" }
+              ]
+            }
+          },
+          "overrides": []
+        },
+        "options": {
+          "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+          "orientation": "auto",
+          "textMode": "value_and_name",
+          "colorMode": "background",
+          "graphMode": "none",
+          "justifyMode": "auto"
+        }
+      },
+      {
+        "id": 6,
+        "type": "stat",
+        "title": "Total Connections",
+        "description": "Sum of established TCP connections",
+        "gridPos": { "x": 20, "y": 1, "w": 4, "h": 4 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "targets": [
+          {
+            "expr": "sum(stardust_connections_established{hostname=~\"$hostname\"})",
+            "legendFormat": "TCP",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "value": null, "color": "#8b5cf6" }
+              ]
+            }
+          },
+          "overrides": []
+        },
+        "options": {
+          "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+          "orientation": "auto",
+          "textMode": "value_and_name",
+          "colorMode": "background",
+          "graphMode": "none",
+          "justifyMode": "auto"
+        }
+      },
+      {
+        "id": 7,
+        "type": "table",
+        "title": "Node Status",
+        "description": "Per-node status overview",
+        "gridPos": { "x": 0, "y": 5, "w": 24, "h": 6 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "targets": [
+          {
+            "expr": "stardust_up{hostname=~\"$hostname\"}",
+            "legendFormat": "",
+            "refId": "up",
+            "format": "table",
+            "instant": true
+          },
+          {
+            "expr": "stardust_uptime_seconds{hostname=~\"$hostname\"}",
+            "legendFormat": "",
+            "refId": "uptime",
+            "format": "table",
+            "instant": true
+          },
+          {
+            "expr": "stardust_cpu_usage_percent{hostname=~\"$hostname\"}",
+            "legendFormat": "",
+            "refId": "cpu",
+            "format": "table",
+            "instant": true
+          },
+          {
+            "expr": "stardust_memory_used_percent{hostname=~\"$hostname\"}",
+            "legendFormat": "",
+            "refId": "mem",
+            "format": "table",
+            "instant": true
+          },
+          {
+            "expr": "stardust_load_1m{hostname=~\"$hostname\"}",
+            "legendFormat": "",
+            "refId": "load",
+            "format": "table",
+            "instant": true
+          },
+          {
+            "expr": "stardust_connections_established{hostname=~\"$hostname\"}",
+            "legendFormat": "",
+            "refId": "conn",
+            "format": "table",
+            "instant": true
+          }
+        ],
+        "transformations": [
+          {
+            "id": "merge",
+            "options": {}
+          },
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {
+                "Time": true,
+                "__name__": true,
+                "agent_id": true,
+                "job": true,
+                "instance": true
+              },
+              "indexByName": {
+                "hostname": 0,
+                "Value #up": 1,
+                "Value #uptime": 2,
+                "Value #cpu": 3,
+                "Value #mem": 4,
+                "Value #load": 5,
+                "Value #conn": 6
+              },
+              "renameByName": {
+                "hostname": "Hostname",
+                "Value #up": "Status",
+                "Value #uptime": "Uptime",
+                "Value #cpu": "CPU %",
+                "Value #mem": "Memory %",
+                "Value #load": "Load 1m",
+                "Value #conn": "Connections"
+              }
+            }
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "align": "center",
+              "cellOptions": { "type": "auto" },
+              "filterable": true
+            }
+          },
+          "overrides": [
+            {
+              "matcher": { "id": "byName", "options": "Hostname" },
+              "properties": [
+                { "id": "custom.width", "value": 180 },
+                { "id": "custom.align", "value": "left" }
+              ]
+            },
+            {
+              "matcher": { "id": "byName", "options": "Status" },
+              "properties": [
+                { "id": "custom.width", "value": 90 },
+                { "id": "mappings", "value": [
+                  { "type": "value", "options": { "1": { "text": "UP", "color": "green" }, "0": { "text": "DOWN", "color": "red" } } }
+                ]},
+                { "id": "custom.cellOptions", "value": { "type": "color-text" } }
+              ]
+            },
+            {
+              "matcher": { "id": "byName", "options": "Uptime" },
+              "properties": [
+                { "id": "unit", "value": "s" },
+                { "id": "decimals", "value": 0 }
+              ]
+            },
+            {
+              "matcher": { "id": "byName", "options": "CPU %" },
+              "properties": [
+                { "id": "unit", "value": "percent" },
+                { "id": "decimals", "value": 1 },
+                { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "basic" } },
+                { "id": "thresholds", "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "value": null, "color": "green" },
+                    { "value": 50, "color": "yellow" },
+                    { "value": 80, "color": "orange" },
+                    { "value": 90, "color": "red" }
+                  ]
+                }},
+                { "id": "min", "value": 0 },
+                { "id": "max", "value": 100 }
+              ]
+            },
+            {
+              "matcher": { "id": "byName", "options": "Memory %" },
+              "properties": [
+                { "id": "unit", "value": "percent" },
+                { "id": "decimals", "value": 1 },
+                { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "basic" } },
+                { "id": "thresholds", "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "value": null, "color": "green" },
+                    { "value": 60, "color": "yellow" },
+                    { "value": 80, "color": "orange" },
+                    { "value": 90, "color": "red" }
+                  ]
+                }},
+                { "id": "min", "value": 0 },
+                { "id": "max", "value": 100 }
+              ]
+            },
+            {
+              "matcher": { "id": "byName", "options": "Load 1m" },
+              "properties": [
+                { "id": "decimals", "value": 2 }
+              ]
+            },
+            {
+              "matcher": { "id": "byName", "options": "Connections" },
+              "properties": [
+                { "id": "decimals", "value": 0 }
+              ]
+            }
+          ]
+        },
+        "options": {
+          "showHeader": true,
+          "sortBy": [{ "displayName": "Hostname", "desc": false }],
+          "footer": { "show": false }
+        }
+      },
+
+      {
+        "type": "row",
+        "title": "CPU & Load",
+        "collapsed": false,
+        "gridPos": { "x": 0, "y": 11, "w": 24, "h": 1 },
+        "id": 101
+      },
+      {
+        "id": 10,
+        "type": "timeseries",
+        "title": "CPU Usage",
+        "description": "CPU usage percentage per node",
+        "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "targets": [
+          {
+            "expr": "stardust_cpu_usage_percent{hostname=~\"$hostname\"}",
+            "legendFormat": "{{hostname}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 100,
+            "color": { "mode": "palette-classic" },
+            "custom": {
+              "lineWidth": 2,
+              "fillOpacity": 15,
+              "gradientMode": "scheme",
+              "spanNulls": false,
+              "showPoints": "never",
+              "axisLabel": "",
+              "scaleDistribution": { "type": "linear" },
+              "thresholdsStyle": { "mode": "off" }
+            },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "value": null, "color": "green" },
+                { "value": 80, "color": "red" }
+              ]
+            }
+          },
+          "overrides": []
+        },
+        "options": {
+          "tooltip": { "mode": "multi", "sort": "desc" },
+          "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] }
+        }
+      },
+      {
+        "id": 11,
+        "type": "timeseries",
+        "title": "CPU I/O Wait",
+        "description": "CPU time spent waiting for I/O",
+        "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "targets": [
+          {
+            "expr": "stardust_cpu_iowait_percent{hostname=~\"$hostname\"}",
+            "legendFormat": "{{hostname}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "color": { "mode": "palette-classic" },
+            "custom": {
+              "lineWidth": 2,
+              "fillOpacity": 15,
+              "gradientMode": "scheme",
+              "spanNulls": false,
+              "showPoints": "never",
+              "thresholdsStyle": { "mode": "off" }
+            },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "value": null, "color": "green" },
+                { "value": 20, "color": "red" }
+              ]
+            }
+          },
+          "overrides": []
+        },
+        "options": {
+          "tooltip": { "mode": "multi", "sort": "desc" },
+          "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] }
+        }
+      },
+      {
+        "id": 12,
+        "type": "timeseries",
+        "title": "Load Average",
+        "description": "1m, 5m, 15m load averages per node",
+        "gridPos": { "x": 0, "y": 20, "w": 12, "h": 8 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "targets": [
+          {
+            "expr": "stardust_load_1m{hostname=~\"$hostname\"}",
+            "legendFormat": "{{hostname}} 1m",
+            "refId": "A"
+          },
+          {
+            "expr": "stardust_load_5m{hostname=~\"$hostname\"}",
+            "legendFormat": "{{hostname}} 5m",
+            "refId": "B"
+          },
+          {
+            "expr": "stardust_load_15m{hostname=~\"$hostname\"}",
+            "legendFormat": "{{hostname}} 15m",
+            "refId": "C"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "color": { "mode": "palette-classic" },
+            "custom": {
+              "lineWidth": 2,
+              "fillOpacity": 8,
+              "gradientMode": "none",
+              "spanNulls": false,
+              "showPoints": "never",
+              "thresholdsStyle": { "mode": "off" }
+            }
+          },
+          "overrides": []
+        },
+        "options": {
+          "tooltip": { "mode": "multi", "sort": "desc" },
+          "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] }
+        }
+      },
+      {
+        "id": 13,
+        "type": "timeseries",
+        "title": "Processes",
+        "description": "Running and total process counts",
+        "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "targets": [
+          {
+            "expr": "stardust_processes_total{hostname=~\"$hostname\"}",
+            "legendFormat": "{{hostname}} total",
+            "refId": "A"
+          },
+          {
+            "expr": "stardust_processes_running{hostname=~\"$hostname\"}",
+            "legendFormat": "{{hostname}} running",
+            "refId": "B"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "color": { "mode": "palette-classic" },
+            "custom": {
+              "lineWidth": 2,
+              "fillOpacity": 8,
+              "gradientMode": "none",
+              "spanNulls": false,
+              "showPoints": "never",
+              "thresholdsStyle": { "mode": "off" }
+            }
+          },
+          "overrides": []
+        },
+        "options": {
+          "tooltip": { "mode": "multi", "sort": "desc" },
+          "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] }
+        }
+      },
+
+      {
+        "type": "row",
+        "title": "Memory & Swap",
+        "collapsed": false,
+        "gridPos": { "x": 0, "y": 28, "w": 24, "h": 1 },
+        "id": 102
+      },
+      {
+        "id": 20,
+        "type": "timeseries",
+        "title": "Memory Usage %",
+        "description": "Memory usage percentage per node",
+        "gridPos": { "x": 0, "y": 29, "w": 12, "h": 8 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "targets": [
+          {
+            "expr": "stardust_memory_used_percent{hostname=~\"$hostname\"}",
+            "legendFormat": "{{hostname}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 100,
+            "color": { "mode": "palette-classic" },
+            "custom": {
+              "lineWidth": 2,
+              "fillOpacity": 15,
+              "gradientMode": "scheme",
+              "spanNulls": false,
+              "showPoints": "never",
+              "thresholdsStyle": { "mode": "dashed" }
+            },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "value": null, "color": "green" },
+                { "value": 80, "color": "orange" },
+                { "value": 90, "color": "red" }
+              ]
+            }
+          },
+          "overrides": []
+        },
+        "options": {
+          "tooltip": { "mode": "multi", "sort": "desc" },
+          "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] }
+        }
+      },
+      {
+        "id": 21,
+        "type": "timeseries",
+        "title": "Memory Breakdown",
+        "description": "Used, cached, buffers, free — stacked per node (select one hostname for clarity)",
+        "gridPos": { "x": 12, "y": 29, "w": 12, "h": 8 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "targets": [
+          {
+            "expr": "stardust_memory_total_bytes{hostname=~\"$hostname\"} - stardust_memory_available_bytes{hostname=~\"$hostname\"}",
+            "legendFormat": "{{hostname}} used",
+            "refId": "A"
+          },
+          {
+            "expr": "stardust_memory_cached_bytes{hostname=~\"$hostname\"}",
+            "legendFormat": "{{hostname}} cached",
+            "refId": "B"
+          },
+          {
+            "expr": "stardust_memory_buffers_bytes{hostname=~\"$hostname\"}",
+            "legendFormat": "{{hostname}} buffers",
+            "refId": "C"
+          },
+          {
+            "expr": "stardust_memory_free_bytes{hostname=~\"$hostname\"}",
+            "legendFormat": "{{hostname}} free",
+            "refId": "D"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "bytes",
+            "min": 0,
+            "color": { "mode": "palette-classic" },
+            "custom": {
+              "lineWidth": 1,
+              "fillOpacity": 60,
+              "gradientMode": "none",
+              "spanNulls": false,
+              "showPoints": "never",
+              "stacking": { "mode": "none", "group": "A" },
+              "thresholdsStyle": { "mode": "off" }
+            }
+          },
+          "overrides": []
+        },
+        "options": {
+          "tooltip": { "mode": "multi", "sort": "desc" },
+          "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["lastNotNull"] }
+        }
+      },
+      {
+        "id": 22,
+        "type": "timeseries",
+        "title": "Swap Usage %",
+        "description": "Swap usage percentage per node",
+        "gridPos": { "x": 0, "y": 37, "w": 12, "h": 7 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "targets": [
+          {
+            "expr": "stardust_swap_used_percent{hostname=~\"$hostname\"}",
+            "legendFormat": "{{hostname}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 100,
+            "color": { "mode": "palette-classic" },
+            "custom": {
+              "lineWidth": 2,
+              "fillOpacity": 15,
+              "gradientMode": "scheme",
+              "spanNulls": false,
+              "showPoints": "never",
+              "thresholdsStyle": { "mode": "off" }
+            }
+          },
+          "overrides": []
+        },
+        "options": {
+          "tooltip": { "mode": "multi", "sort": "desc" },
+          "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] }
+        }
+      },
+      {
+        "id": 23,
+        "type": "timeseries",
+        "title": "Swap Used",
+        "description": "Swap bytes used per node",
+        "gridPos": { "x": 12, "y": 37, "w": 12, "h": 7 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "targets": [
+          {
+            "expr": "stardust_swap_used_bytes{hostname=~\"$hostname\"}",
+            "legendFormat": "{{hostname}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "bytes",
+            "min": 0,
+            "color": { "mode": "palette-classic" },
+            "custom": {
+              "lineWidth": 2,
+              "fillOpacity": 15,
+              "gradientMode": "none",
+              "spanNulls": false,
+              "showPoints": "never",
+              "thresholdsStyle": { "mode": "off" }
+            }
+          },
+          "overrides": []
+        },
+        "options": {
+          "tooltip": { "mode": "multi", "sort": "desc" },
+          "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["lastNotNull"] }
+        }
+      },
+
+      {
+        "type": "row",
+        "title": "Filesystems",
+        "collapsed": false,
+        "gridPos": { "x": 0, "y": 44, "w": 24, "h": 1 },
+        "id": 103
+      },
+      {
+        "id": 30,
+        "type": "bargauge",
+        "title": "Filesystem Usage",
+        "description": "Current filesystem usage per mountpoint",
+        "gridPos": { "x": 0, "y": 45, "w": 12, "h": 8 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "targets": [
+          {
+            "expr": "stardust_filesystem_used_percent{hostname=~\"$hostname\"}",
+            "legendFormat": "{{hostname}} {{mountpoint}}",
+            "refId": "A",
+            "instant": true
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 100,
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "value": null, "color": "green" },
+                { "value": 70, "color": "yellow" },
+                { "value": 85, "color": "orange" },
+                { "value": 95, "color": "red" }
+              ]
+            }
+          },
+          "overrides": []
+        },
+        "options": {
+          "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+          "orientation": "horizontal",
+          "displayMode": "gradient",
+          "showUnfilled": true,
+          "valueMode": "text",
+          "minVizWidth": 8,
+          "minVizHeight": 16,
+          "namePlacement": "auto"
+        }
+      },
+      {
+        "id": 31,
+        "type": "bargauge",
+        "title": "Filesystem Free Space",
+        "description": "Free space per mountpoint",
+        "gridPos": { "x": 12, "y": 45, "w": 12, "h": 8 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "targets": [
+          {
+            "expr": "stardust_filesystem_free_bytes{hostname=~\"$hostname\"}",
+            "legendFormat": "{{hostname}} {{mountpoint}}",
+            "refId": "A",
+            "instant": true
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "bytes",
+            "min": 0,
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "value": null, "color": "red" },
+                { "value": 1073741824, "color": "orange" },
+                { "value": 10737418240, "color": "yellow" },
+                { "value": 21474836480, "color": "green" }
+              ]
+            }
+          },
+          "overrides": []
+        },
+        "options": {
+          "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+          "orientation": "horizontal",
+          "displayMode": "gradient",
+          "showUnfilled": true,
+          "valueMode": "text",
+          "minVizWidth": 8,
+          "minVizHeight": 16,
+          "namePlacement": "auto"
+        }
+      },
+
+      {
+        "type": "row",
+        "title": "Network",
+        "collapsed": false,
+        "gridPos": { "x": 0, "y": 53, "w": 24, "h": 1 },
+        "id": 104
+      },
+      {
+        "id": 40,
+        "type": "timeseries",
+        "title": "Network Throughput",
+        "description": "RX/TX bytes per second per interface",
+        "gridPos": { "x": 0, "y": 54, "w": 12, "h": 8 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "targets": [
+          {
+            "expr": "rate(stardust_network_rx_bytes_total{hostname=~\"$hostname\"}[5m])",
+            "legendFormat": "{{hostname}} {{interface}} rx",
+            "refId": "A"
+          },
+          {
+            "expr": "-rate(stardust_network_tx_bytes_total{hostname=~\"$hostname\"}[5m])",
+            "legendFormat": "{{hostname}} {{interface}} tx",
+            "refId": "B"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "Bps",
+            "color": { "mode": "palette-classic" },
+            "custom": {
+              "lineWidth": 2,
+              "fillOpacity": 20,
+              "gradientMode": "scheme",
+              "spanNulls": false,
+              "showPoints": "never",
+              "thresholdsStyle": { "mode": "off" },
+              "axisCenteredZero": true
+            }
+          },
+          "overrides": []
+        },
+        "options": {
+          "tooltip": { "mode": "multi", "sort": "desc" },
+          "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] }
+        }
+      },
+      {
+        "id": 41,
+        "type": "timeseries",
+        "title": "Network Errors",
+        "description": "RX/TX errors per second per interface",
+        "gridPos": { "x": 12, "y": 54, "w": 12, "h": 8 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "targets": [
+          {
+            "expr": "rate(stardust_network_rx_errors_total{hostname=~\"$hostname\"}[5m])",
+            "legendFormat": "{{hostname}} {{interface}} rx errors",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(stardust_network_tx_errors_total{hostname=~\"$hostname\"}[5m])",
+            "legendFormat": "{{hostname}} {{interface}} tx errors",
+            "refId": "B"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ops",
+            "min": 0,
+            "color": { "mode": "palette-classic" },
+            "custom": {
+              "lineWidth": 2,
+              "fillOpacity": 15,
+              "gradientMode": "none",
+              "spanNulls": false,
+              "showPoints": "never",
+              "thresholdsStyle": { "mode": "off" }
+            }
+          },
+          "overrides": []
+        },
+        "options": {
+          "tooltip": { "mode": "multi", "sort": "desc" },
+          "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] }
+        }
+      },
+
+      {
+        "type": "row",
+        "title": "Connections & Temperature",
+        "collapsed": false,
+        "gridPos": { "x": 0, "y": 62, "w": 24, "h": 1 },
+        "id": 105
+      },
+      {
+        "id": 50,
+        "type": "timeseries",
+        "title": "TCP Connections",
+        "description": "TCP connection states per node",
+        "gridPos": { "x": 0, "y": 63, "w": 12, "h": 8 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "targets": [
+          {
+            "expr": "stardust_connections_established{hostname=~\"$hostname\"}",
+            "legendFormat": "{{hostname}} established",
+            "refId": "A"
+          },
+          {
+            "expr": "stardust_connections_listen{hostname=~\"$hostname\"}",
+            "legendFormat": "{{hostname}} listen",
+            "refId": "B"
+          },
+          {
+            "expr": "stardust_connections_time_wait{hostname=~\"$hostname\"}",
+            "legendFormat": "{{hostname}} time_wait",
+            "refId": "C"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "color": { "mode": "palette-classic" },
+            "custom": {
+              "lineWidth": 2,
+              "fillOpacity": 8,
+              "gradientMode": "none",
+              "spanNulls": false,
+              "showPoints": "never",
+              "thresholdsStyle": { "mode": "off" }
+            }
+          },
+          "overrides": []
+        },
+        "options": {
+          "tooltip": { "mode": "multi", "sort": "desc" },
+          "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] }
+        }
+      },
+      {
+        "id": 51,
+        "type": "timeseries",
+        "title": "Temperature",
+        "description": "Sensor temperatures in Celsius per thermal zone",
+        "gridPos": { "x": 12, "y": 63, "w": 12, "h": 8 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "targets": [
+          {
+            "expr": "stardust_temperature_celsius{hostname=~\"$hostname\"}",
+            "legendFormat": "{{hostname}} {{zone}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "celsius",
+            "min": 0,
+            "color": { "mode": "palette-classic" },
+            "custom": {
+              "lineWidth": 2,
+              "fillOpacity": 15,
+              "gradientMode": "scheme",
+              "spanNulls": false,
+              "showPoints": "never",
+              "thresholdsStyle": { "mode": "dashed" }
+            },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "value": null, "color": "green" },
+                { "value": 70, "color": "orange" },
+                { "value": 85, "color": "red" }
+              ]
+            }
+          },
+          "overrides": []
+        },
+        "options": {
+          "tooltip": { "mode": "multi", "sort": "desc" },
+          "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] }
+        }
+      },
+
+      {
+        "type": "row",
+        "title": "Disk I/O",
+        "collapsed": false,
+        "gridPos": { "x": 0, "y": 71, "w": 24, "h": 1 },
+        "id": 106
+      },
+      {
+        "id": 60,
+        "type": "timeseries",
+        "title": "Disk Read/Write Rate",
+        "description": "Disk read and write operations per second",
+        "gridPos": { "x": 0, "y": 72, "w": 12, "h": 8 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "targets": [
+          {
+            "expr": "rate(stardust_disk_reads_total{hostname=~\"$hostname\"}[5m])",
+            "legendFormat": "{{hostname}} {{device}} reads",
+            "refId": "A"
+          },
+          {
+            "expr": "-rate(stardust_disk_writes_total{hostname=~\"$hostname\"}[5m])",
+            "legendFormat": "{{hostname}} {{device}} writes",
+            "refId": "B"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ops",
+            "color": { "mode": "palette-classic" },
+            "custom": {
+              "lineWidth": 2,
+              "fillOpacity": 20,
+              "gradientMode": "scheme",
+              "spanNulls": false,
+              "showPoints": "never",
+              "thresholdsStyle": { "mode": "off" },
+              "axisCenteredZero": true
+            }
+          },
+          "overrides": []
+        },
+        "options": {
+          "tooltip": { "mode": "multi", "sort": "desc" },
+          "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] }
+        }
+      },
+      {
+        "id": 61,
+        "type": "timeseries",
+        "title": "Disk I/O In Progress",
+        "description": "Number of I/O operations currently in flight",
+        "gridPos": { "x": 12, "y": 72, "w": 12, "h": 8 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "targets": [
+          {
+            "expr": "stardust_disk_io_in_progress{hostname=~\"$hostname\"}",
+            "legendFormat": "{{hostname}} {{device}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "color": { "mode": "palette-classic" },
+            "custom": {
+              "lineWidth": 2,
+              "fillOpacity": 15,
+              "gradientMode": "none",
+              "spanNulls": false,
+              "showPoints": "never",
+              "thresholdsStyle": { "mode": "off" }
+            }
+          },
+          "overrides": []
+        },
+        "options": {
+          "tooltip": { "mode": "multi", "sort": "desc" },
+          "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] }
+        }
+      }
+    ]
+  },
+  "folderUid": "stardust",
+  "overwrite": true
+}

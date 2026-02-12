@@ -32,7 +32,7 @@ fn onRequest(r: zap.Request) !void {
     const path = r.path orelse "/";
 
     // API routes
-    if (std.mem.startsWith(u8, path, "/api/")) {
+    if (std.mem.startsWith(u8, path, "/api/") or std.mem.eql(u8, path, "/metrics")) {
         global_api.handleRequest(r) catch |err| {
             std.log.err("api error: {}", .{err});
             r.setStatus(.internal_server_error);

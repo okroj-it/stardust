@@ -16,6 +16,7 @@ ui/
 # Editor / IDE
 .claude/
 .agents/
+.mcp.json
 CLAUDE.md
 *.tmp.*
 

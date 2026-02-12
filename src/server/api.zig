@@ -12,6 +12,7 @@ const FleetEngine = @import("fleet.zig").FleetEngine;
 const service_mod = @import("services.zig");
 const ServiceEngine = service_mod.ServiceEngine;
 const ServiceScope = service_mod.ServiceScope;
+const common = @import("common");
 
 pub const Api = struct {
     allocator: std.mem.Allocator,
@@ -95,6 +96,10 @@ pub const Api = struct {
             try self.handleLogin(r);
             return;
         }
+        if (std.mem.eql(u8, path, "/metrics")) {
+            try self.handleMetrics(r);
+            return;
+        }
 
         // Auth middleware: check JWT for all other routes
         if (self.auth) |auth| {
@@ -144,6 +149,210 @@ pub const Api = struct {
     fn handleHealth(self: *Api, r: zap.Request) !void {
         _ = self;
         try r.sendJson("{\"status\":\"ok\"}");
+    }
+
+    fn handleMetrics(self: *Api, r: zap.Request) !void {
+        if (r.methodAsEnum() != .GET) {
+            r.setStatus(.method_not_allowed);
+            try r.sendJson("{\"error\":\"method not allowed\"}");
+            return;
+        }
+
+        const agents = try self.store.getAllAgentStatus(self.allocator);
+        defer self.allocator.free(agents);
+
+        var buf: std.ArrayListUnmanaged(u8) = .{};
+        defer buf.deinit(self.allocator);
+        const w = buf.writer(self.allocator);
+
+        // --- HELP/TYPE headers ---
+        try w.writeAll(
+            \\# HELP stardust_up Whether the node is connected (1=up, 0=down).
+            \\# TYPE stardust_up gauge
+            \\# HELP stardust_uptime_seconds System uptime in seconds.
+            \\# TYPE stardust_uptime_seconds gauge
+            \\# HELP stardust_cpu_usage_percent CPU usage percentage (0-100).
+            \\# TYPE stardust_cpu_usage_percent gauge
+            \\# HELP stardust_cpu_iowait_percent CPU I/O wait percentage.
+            \\# TYPE stardust_cpu_iowait_percent gauge
+            \\# HELP stardust_memory_total_bytes Total physical memory in bytes.
+            \\# TYPE stardust_memory_total_bytes gauge
+            \\# HELP stardust_memory_free_bytes Free physical memory in bytes.
+            \\# TYPE stardust_memory_free_bytes gauge
+            \\# HELP stardust_memory_available_bytes Available memory in bytes.
+            \\# TYPE stardust_memory_available_bytes gauge
+            \\# HELP stardust_memory_buffers_bytes Buffered memory in bytes.
+            \\# TYPE stardust_memory_buffers_bytes gauge
+            \\# HELP stardust_memory_cached_bytes Cached memory in bytes.
+            \\# TYPE stardust_memory_cached_bytes gauge
+            \\# HELP stardust_memory_used_percent Memory usage percentage (0-100).
+            \\# TYPE stardust_memory_used_percent gauge
+            \\# HELP stardust_swap_total_bytes Total swap in bytes.
+            \\# TYPE stardust_swap_total_bytes gauge
+            \\# HELP stardust_swap_used_bytes Used swap in bytes.
+            \\# TYPE stardust_swap_used_bytes gauge
+            \\# HELP stardust_swap_used_percent Swap usage percentage (0-100).
+            \\# TYPE stardust_swap_used_percent gauge
+            \\# HELP stardust_load_1m 1-minute load average.
+            \\# TYPE stardust_load_1m gauge
+            \\# HELP stardust_load_5m 5-minute load average.
+            \\# TYPE stardust_load_5m gauge
+            \\# HELP stardust_load_15m 15-minute load average.
+            \\# TYPE stardust_load_15m gauge
+            \\# HELP stardust_processes_running Number of running processes.
+            \\# TYPE stardust_processes_running gauge
+            \\# HELP stardust_processes_total Total number of processes.
+            \\# TYPE stardust_processes_total gauge
+            \\# HELP stardust_filesystem_total_bytes Filesystem total size in bytes.
+            \\# TYPE stardust_filesystem_total_bytes gauge
+            \\# HELP stardust_filesystem_free_bytes Filesystem free space in bytes.
+            \\# TYPE stardust_filesystem_free_bytes gauge
+            \\# HELP stardust_filesystem_used_percent Filesystem usage percentage (0-100).
+            \\# TYPE stardust_filesystem_used_percent gauge
+            \\# HELP stardust_network_rx_bytes_total Network bytes received.
+            \\# TYPE stardust_network_rx_bytes_total counter
+            \\# HELP stardust_network_tx_bytes_total Network bytes transmitted.
+            \\# TYPE stardust_network_tx_bytes_total counter
+            \\# HELP stardust_network_rx_errors_total Network receive errors.
+            \\# TYPE stardust_network_rx_errors_total counter
+            \\# HELP stardust_network_tx_errors_total Network transmit errors.
+            \\# TYPE stardust_network_tx_errors_total counter
+            \\# HELP stardust_connections_established Number of established TCP connections.
+            \\# TYPE stardust_connections_established gauge
+            \\# HELP stardust_connections_listen Number of listening TCP sockets.
+            \\# TYPE stardust_connections_listen gauge
+            \\# HELP stardust_connections_time_wait Number of TCP connections in TIME_WAIT.
+            \\# TYPE stardust_connections_time_wait gauge
+            \\# HELP stardust_connections_total Total TCP connections.
+            \\# TYPE stardust_connections_total gauge
+            \\# HELP stardust_temperature_celsius Sensor temperature in degrees Celsius.
+            \\# TYPE stardust_temperature_celsius gauge
+            \\# HELP stardust_disk_reads_total Disk reads completed.
+            \\# TYPE stardust_disk_reads_total counter
+            \\# HELP stardust_disk_writes_total Disk writes completed.
+            \\# TYPE stardust_disk_writes_total counter
+            \\# HELP stardust_disk_io_in_progress Disk I/O operations currently in progress.
+            \\# TYPE stardust_disk_io_in_progress gauge
+            \\
+        );
+
+        for (agents) |agent| {
+            // Parse latest snapshot for this agent
+            const snapshot_json = self.store.getLatest(agent.agent_id) orelse {
+                // No stats — only emit up=0
+                try writeMetric(w, "stardust_up", agent.agent_id, "", "0");
+                continue;
+            };
+
+            const parsed = std.json.parseFromSlice(common.SystemStats, self.allocator, snapshot_json, .{
+                .ignore_unknown_fields = true,
+                .allocate = .alloc_always,
+            }) catch {
+                try writeMetric(w, "stardust_up", agent.agent_id, "", if (agent.connected) "1" else "0");
+                continue;
+            };
+            defer parsed.deinit();
+            const s = parsed.value;
+
+            const host = s.hostname;
+            const id = agent.agent_id;
+
+            // up
+            try writeMetricL(w, "stardust_up", id, host, "", if (agent.connected) "1" else "0");
+
+            // uptime
+            try std.fmt.format(w, "stardust_uptime_seconds{{agent_id=\"{s}\",hostname=\"{s}\"}} {d:.1}\n", .{ id, host, s.uptime_secs });
+
+            // cpu
+            try std.fmt.format(w, "stardust_cpu_usage_percent{{agent_id=\"{s}\",hostname=\"{s}\"}} {d:.2}\n", .{ id, host, s.cpu.usage_percent });
+            try std.fmt.format(w, "stardust_cpu_iowait_percent{{agent_id=\"{s}\",hostname=\"{s}\"}} {d:.2}\n", .{ id, host, s.cpu.iowait_percent });
+
+            // memory
+            try std.fmt.format(w, "stardust_memory_total_bytes{{agent_id=\"{s}\",hostname=\"{s}\"}} {d}\n", .{ id, host, s.memory.total_bytes });
+            try std.fmt.format(w, "stardust_memory_free_bytes{{agent_id=\"{s}\",hostname=\"{s}\"}} {d}\n", .{ id, host, s.memory.free_bytes });
+            try std.fmt.format(w, "stardust_memory_available_bytes{{agent_id=\"{s}\",hostname=\"{s}\"}} {d}\n", .{ id, host, s.memory.available_bytes });
+            try std.fmt.format(w, "stardust_memory_buffers_bytes{{agent_id=\"{s}\",hostname=\"{s}\"}} {d}\n", .{ id, host, s.memory.buffers_bytes });
+            try std.fmt.format(w, "stardust_memory_cached_bytes{{agent_id=\"{s}\",hostname=\"{s}\"}} {d}\n", .{ id, host, s.memory.cached_bytes });
+            try std.fmt.format(w, "stardust_memory_used_percent{{agent_id=\"{s}\",hostname=\"{s}\"}} {d:.2}\n", .{ id, host, s.memory.used_percent });
+
+            // swap
+            try std.fmt.format(w, "stardust_swap_total_bytes{{agent_id=\"{s}\",hostname=\"{s}\"}} {d}\n", .{ id, host, s.swap.total_bytes });
+            try std.fmt.format(w, "stardust_swap_used_bytes{{agent_id=\"{s}\",hostname=\"{s}\"}} {d}\n", .{ id, host, s.swap.used_bytes });
+            try std.fmt.format(w, "stardust_swap_used_percent{{agent_id=\"{s}\",hostname=\"{s}\"}} {d:.2}\n", .{ id, host, s.swap.used_percent });
+
+            // load
+            try std.fmt.format(w, "stardust_load_1m{{agent_id=\"{s}\",hostname=\"{s}\"}} {d:.4}\n", .{ id, host, s.load.one });
+            try std.fmt.format(w, "stardust_load_5m{{agent_id=\"{s}\",hostname=\"{s}\"}} {d:.4}\n", .{ id, host, s.load.five });
+            try std.fmt.format(w, "stardust_load_15m{{agent_id=\"{s}\",hostname=\"{s}\"}} {d:.4}\n", .{ id, host, s.load.fifteen });
+            try std.fmt.format(w, "stardust_processes_running{{agent_id=\"{s}\",hostname=\"{s}\"}} {d}\n", .{ id, host, s.load.running_processes });
+            try std.fmt.format(w, "stardust_processes_total{{agent_id=\"{s}\",hostname=\"{s}\"}} {d}\n", .{ id, host, s.load.total_processes });
+
+            // filesystems
+            for (s.filesystems) |fs| {
+                try std.fmt.format(w, "stardust_filesystem_total_bytes{{agent_id=\"{s}\",hostname=\"{s}\",mountpoint=\"{s}\",fstype=\"{s}\"}} {d}\n", .{ id, host, fs.mount_point, fs.fs_type, fs.total_bytes });
+                try std.fmt.format(w, "stardust_filesystem_free_bytes{{agent_id=\"{s}\",hostname=\"{s}\",mountpoint=\"{s}\",fstype=\"{s}\"}} {d}\n", .{ id, host, fs.mount_point, fs.fs_type, fs.free_bytes });
+                try std.fmt.format(w, "stardust_filesystem_used_percent{{agent_id=\"{s}\",hostname=\"{s}\",mountpoint=\"{s}\",fstype=\"{s}\"}} {d:.2}\n", .{ id, host, fs.mount_point, fs.fs_type, fs.used_percent });
+            }
+
+            // network
+            for (s.network) |iface| {
+                try std.fmt.format(w, "stardust_network_rx_bytes_total{{agent_id=\"{s}\",hostname=\"{s}\",interface=\"{s}\"}} {d}\n", .{ id, host, iface.name, iface.rx_bytes });
+                try std.fmt.format(w, "stardust_network_tx_bytes_total{{agent_id=\"{s}\",hostname=\"{s}\",interface=\"{s}\"}} {d}\n", .{ id, host, iface.name, iface.tx_bytes });
+                try std.fmt.format(w, "stardust_network_rx_errors_total{{agent_id=\"{s}\",hostname=\"{s}\",interface=\"{s}\"}} {d}\n", .{ id, host, iface.name, iface.rx_errors });
+                try std.fmt.format(w, "stardust_network_tx_errors_total{{agent_id=\"{s}\",hostname=\"{s}\",interface=\"{s}\"}} {d}\n", .{ id, host, iface.name, iface.tx_errors });
+            }
+
+            // connections
+            try std.fmt.format(w, "stardust_connections_established{{agent_id=\"{s}\",hostname=\"{s}\"}} {d}\n", .{ id, host, s.connections.established });
+            try std.fmt.format(w, "stardust_connections_listen{{agent_id=\"{s}\",hostname=\"{s}\"}} {d}\n", .{ id, host, s.connections.listen });
+            try std.fmt.format(w, "stardust_connections_time_wait{{agent_id=\"{s}\",hostname=\"{s}\"}} {d}\n", .{ id, host, s.connections.time_wait });
+            try std.fmt.format(w, "stardust_connections_total{{agent_id=\"{s}\",hostname=\"{s}\"}} {d}\n", .{ id, host, s.connections.total });
+
+            // temperatures
+            for (s.temperatures) |temp| {
+                try std.fmt.format(w, "stardust_temperature_celsius{{agent_id=\"{s}\",hostname=\"{s}\",zone=\"{s}\"}} {d:.1}\n", .{ id, host, temp.zone, temp.temp_celsius });
+            }
+
+            // disk I/O
+            for (s.disks) |disk| {
+                try std.fmt.format(w, "stardust_disk_reads_total{{agent_id=\"{s}\",hostname=\"{s}\",device=\"{s}\"}} {d}\n", .{ id, host, disk.name, disk.reads_completed });
+                try std.fmt.format(w, "stardust_disk_writes_total{{agent_id=\"{s}\",hostname=\"{s}\",device=\"{s}\"}} {d}\n", .{ id, host, disk.name, disk.writes_completed });
+                try std.fmt.format(w, "stardust_disk_io_in_progress{{agent_id=\"{s}\",hostname=\"{s}\",device=\"{s}\"}} {d}\n", .{ id, host, disk.name, disk.io_in_progress });
+            }
+        }
+
+        r.setHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8") catch {};
+        try r.sendBody(buf.items);
+    }
+
+    fn writeMetric(w: anytype, name: []const u8, agent_id: []const u8, extra_labels: []const u8, value: []const u8) !void {
+        try w.writeAll(name);
+        try w.writeAll("{agent_id=\"");
+        try w.writeAll(agent_id);
+        try w.writeByte('"');
+        if (extra_labels.len > 0) {
+            try w.writeByte(',');
+            try w.writeAll(extra_labels);
+        }
+        try w.writeAll("} ");
+        try w.writeAll(value);
+        try w.writeByte('\n');
+    }
+
+    fn writeMetricL(w: anytype, name: []const u8, agent_id: []const u8, hostname: []const u8, extra_labels: []const u8, value: []const u8) !void {
+        try w.writeAll(name);
+        try w.writeAll("{agent_id=\"");
+        try w.writeAll(agent_id);
+        try w.writeAll("\",hostname=\"");
+        try w.writeAll(hostname);
+        try w.writeByte('"');
+        if (extra_labels.len > 0) {
+            try w.writeByte(',');
+            try w.writeAll(extra_labels);
+        }
+        try w.writeAll("} ");
+        try w.writeAll(value);
+        try w.writeByte('\n');
     }
 
     fn handleLogin(self: *Api, r: zap.Request) !void {
