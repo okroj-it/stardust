@@ -348,12 +348,13 @@ export interface Capabilities {
   fleet: boolean
   services: boolean
   processes: boolean
+  logs: boolean
   drift: boolean
 }
 
 export async function fetchCapabilities(): Promise<Capabilities> {
   const res = await apiFetch(`${BASE}/api/capabilities`)
-  if (!res.ok) return { deployer: false, auth: false, ansible: false, fleet: false, services: false, processes: false, drift: false }
+  if (!res.ok) return { deployer: false, auth: false, ansible: false, fleet: false, services: false, processes: false, logs: false, drift: false }
   return res.json()
 }
 
@@ -713,4 +714,57 @@ export function parseProcessList(output: string): ProcessInfo[] {
     }
   }
   return processes
+}
+
+// --- Log Streaming ---
+
+export type LogSource = 'journal' | 'file'
+
+export interface LogPollResult {
+  output: string
+  offset: number
+  done: boolean
+  ok: boolean
+}
+
+export async function startLogStream(
+  nodeId: string,
+  source: LogSource,
+  service?: string,
+  path?: string,
+  lines?: number,
+): Promise<string> {
+  const res = await apiFetch(`${BASE}/api/logs/${nodeId}/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      source,
+      ...(service ? { service } : {}),
+      ...(path ? { path } : {}),
+      ...(lines ? { lines } : {}),
+    }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+  const data = await res.json()
+  return data.job_id
+}
+
+export async function pollLogStream(nodeId: string, jobId: string, offset: number): Promise<LogPollResult> {
+  const res = await apiFetch(`${BASE}/api/logs/${nodeId}/poll?job=${jobId}&offset=${offset}`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function stopLogStream(nodeId: string, jobId: string): Promise<void> {
+  await apiFetch(`${BASE}/api/logs/${nodeId}/stop`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ job_id: jobId }),
+  })
 }

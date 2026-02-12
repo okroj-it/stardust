@@ -14,6 +14,8 @@ const ServiceEngine = service_mod.ServiceEngine;
 const ServiceScope = service_mod.ServiceScope;
 const process_mod = @import("processes.zig");
 const ProcessEngine = process_mod.ProcessEngine;
+const log_mod = @import("logs.zig");
+const LogEngine = log_mod.LogEngine;
 const DriftEngine = @import("drift.zig").DriftEngine;
 const common = @import("common");
 
@@ -29,6 +31,7 @@ pub const Api = struct {
     fleet: ?*FleetEngine = null,
     services: ?*ServiceEngine = null,
     processes: ?*ProcessEngine = null,
+    logs: ?*LogEngine = null,
     drift: ?*DriftEngine = null,
 
     pub fn init(allocator: std.mem.Allocator, store: *Store) Api {
@@ -76,6 +79,10 @@ pub const Api = struct {
 
     pub fn setProcesses(self: *Api, p: *ProcessEngine) void {
         self.processes = p;
+    }
+
+    pub fn setLogs(self: *Api, l: *LogEngine) void {
+        self.logs = l;
     }
 
     pub fn setDrift(self: *Api, d: *DriftEngine) void {
@@ -156,6 +163,8 @@ pub const Api = struct {
             try self.handleServices(r, path);
         } else if (std.mem.startsWith(u8, path, "/api/processes/")) {
             try self.handleProcesses(r, path);
+        } else if (std.mem.startsWith(u8, path, "/api/logs/")) {
+            try self.handleLogs(r, path);
         } else if (std.mem.startsWith(u8, path, "/api/drift/")) {
             try self.handleDrift(r, path);
         } else {
@@ -1222,7 +1231,7 @@ pub const Api = struct {
         defer if (ansible_ver != null) self.allocator.free(ver_json);
 
         const resp = std.fmt.allocPrint(self.allocator,
-            \\{{"deployer":{s},"auth":{s},"ansible":{s},"ansible_version":{s},"fleet":{s},"services":{s},"processes":{s},"drift":{s}}}
+            \\{{"deployer":{s},"auth":{s},"ansible":{s},"ansible_version":{s},"fleet":{s},"services":{s},"processes":{s},"logs":{s},"drift":{s}}}
         , .{
             if (self.deployer != null) "true" else "false",
             if (self.auth != null) "true" else "false",
@@ -1231,6 +1240,7 @@ pub const Api = struct {
             if (self.fleet != null) "true" else "false",
             if (self.services != null) "true" else "false",
             if (self.processes != null) "true" else "false",
+            if (self.logs != null) "true" else "false",
             if (self.drift != null) "true" else "false",
         }) catch {
             r.setStatus(.internal_server_error);
@@ -1820,6 +1830,147 @@ pub const Api = struct {
         };
         defer self.allocator.free(resp);
         try r.sendJson(resp);
+    }
+
+    // --- Log Streaming ---
+
+    fn handleLogs(self: *Api, r: zap.Request, path: []const u8) !void {
+        const engine = self.logs orelse {
+            r.setStatus(.service_unavailable);
+            try r.sendJson("{\"error\":\"log streaming not available\"}");
+            return;
+        };
+
+        // Path: /api/logs/<node_id>/<action>
+        const after = path["/api/logs/".len..];
+        const slash_pos = std.mem.indexOf(u8, after, "/");
+        if (slash_pos == null) {
+            r.setStatus(.not_found);
+            try r.sendJson("{\"error\":\"missing sub-path\"}");
+            return;
+        }
+        const node_id = after[0..slash_pos.?];
+        const rest = after[slash_pos.?..];
+
+        if (std.mem.eql(u8, rest, "/start")) {
+            try self.handleLogStart(r, engine, node_id);
+        } else if (std.mem.eql(u8, rest, "/poll")) {
+            try self.handleLogPoll(r, engine);
+        } else if (std.mem.eql(u8, rest, "/stop")) {
+            try self.handleLogStop(r, engine);
+        } else {
+            r.setStatus(.not_found);
+            try r.sendJson("{\"error\":\"not found\"}");
+        }
+    }
+
+    fn handleLogStart(self: *Api, r: zap.Request, engine: *LogEngine, node_id: []const u8) !void {
+        if (r.methodAsEnum() != .POST) {
+            r.setStatus(.method_not_allowed);
+            try r.sendJson("{\"error\":\"method not allowed\"}");
+            return;
+        }
+
+        const body = r.body orelse {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"missing request body\"}");
+            return;
+        };
+
+        const parsed = std.json.parseFromSlice(LogStartRequest, self.allocator, body, .{ .ignore_unknown_fields = true }) catch {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"invalid JSON\"}");
+            return;
+        };
+        defer parsed.deinit();
+        const req = parsed.value;
+
+        const lines: u32 = if (req.lines > 0 and req.lines <= 10000) req.lines else 100;
+
+        const job_id = engine.startLogStream(node_id, req.source, req.service, req.path, lines) orelse {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"failed to start log stream\"}");
+            return;
+        };
+
+        const resp = std.fmt.allocPrint(self.allocator,
+            \\{{"job_id":"{s}"}}
+        , .{job_id}) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(resp);
+        try r.sendJson(resp);
+    }
+
+    fn handleLogPoll(self: *Api, r: zap.Request, engine: *LogEngine) !void {
+        if (r.methodAsEnum() != .GET) {
+            r.setStatus(.method_not_allowed);
+            try r.sendJson("{\"error\":\"method not allowed\"}");
+            return;
+        }
+
+        const job_id = r.getParamSlice("job") orelse {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"missing job param\"}");
+            return;
+        };
+
+        const offset_str = r.getParamSlice("offset") orelse "0";
+        const offset = std.fmt.parseInt(usize, offset_str, 10) catch 0;
+
+        const state = engine.pollLogStream(job_id, offset) orelse {
+            r.setStatus(.not_found);
+            try r.sendJson("{\"error\":\"job not found\"}");
+            return;
+        };
+
+        const escaped = jsonEscape(self.allocator, state.new_output) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(escaped);
+
+        const resp = std.fmt.allocPrint(self.allocator,
+            \\{{"output":"{s}","offset":{d},"done":{s},"ok":{s}}}
+        , .{
+            escaped,
+            offset + state.new_output.len,
+            if (state.done) "true" else "false",
+            if (state.ok) "true" else "false",
+        }) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(resp);
+        try r.sendJson(resp);
+    }
+
+    fn handleLogStop(self: *Api, r: zap.Request, engine: *LogEngine) !void {
+        if (r.methodAsEnum() != .POST) {
+            r.setStatus(.method_not_allowed);
+            try r.sendJson("{\"error\":\"method not allowed\"}");
+            return;
+        }
+
+        const body = r.body orelse {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"missing request body\"}");
+            return;
+        };
+
+        const parsed = std.json.parseFromSlice(LogStopRequest, self.allocator, body, .{ .ignore_unknown_fields = true }) catch {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"invalid JSON\"}");
+            return;
+        };
+        defer parsed.deinit();
+
+        engine.stopLogStream(parsed.value.job_id);
+        try r.sendJson("{\"ok\":true}");
     }
 
     // --- Drift Detection ---
@@ -2429,6 +2580,19 @@ const ServiceActionRequest = struct {
 const ProcessKillRequest = struct {
     pid: u32,
     signal: u8 = 15,
+};
+
+// --- Log Streaming ---
+
+const LogStartRequest = struct {
+    source: []const u8,
+    service: ?[]const u8 = null,
+    path: ?[]const u8 = null,
+    lines: u32 = 100,
+};
+
+const LogStopRequest = struct {
+    job_id: []const u8,
 };
 
 /// Escape a string for embedding inside a JSON string (between quotes).

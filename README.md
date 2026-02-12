@@ -7,7 +7,7 @@
 <p align="center">
   <em>A lightweight server monitoring & orchestration platform built in Zig.<br/>
   Deploy zero-dependency agents to your Linux fleet, collect real-time telemetry over WebSockets,<br/>
-  tag and group nodes, open interactive SSH terminals, run fleet-wide commands, manage packages and systemd services, explore processes with kill signals, execute Ansible playbooks, detect configuration drift, and export Prometheus metrics — all from a single binary and a clean React dashboard.</em>
+  tag and group nodes, open interactive SSH terminals, run fleet-wide commands, manage packages and systemd services, explore processes with kill signals, stream logs in real time, execute Ansible playbooks, detect configuration drift, and export Prometheus metrics — all from a single binary and a clean React dashboard.</em>
 </p>
 
 <p align="center">
@@ -41,6 +41,7 @@ Every component draws from David Bowie's *Space Oddity* and *Ziggy Stardust* myt
 | Fleet Command | **Starman** | Parallel ad-hoc command execution across nodes | *"There's a starman waiting in the sky"* |
 | Service Manager | **Life on Mars** | Remote systemd service viewer and controller | *"Is there life on Mars?"* |
 | Process Explorer | **Ashes to Ashes** | Browser-based process viewer with kill signals | *"Ashes to ashes, funk to funky"* |
+| Log Streaming | **Sound and Vision** | Real-time log tailing (journalctl & files) | *"Don't you wonder sometimes, 'bout sound and vision?"* |
 | Ansible | **Ziggy** | Optional Ansible orchestration engine | *"Ziggy played guitar"* |
 
 ---
@@ -62,6 +63,7 @@ Every component draws from David Bowie's *Space Oddity* and *Ziggy Stardust* myt
                     │                  │──── SSH (Starman) ────►  │              │
                     │                  │──── SSH (Life on Mars)─►  │              │
                     │                  │──── SSH (Ashes) ───────►  │              │
+                    │                  │──── SSH (Sound&Vision)─►  │              │
                     └────────┬─────────┘                             └─────────────┘
                              │
                     ┌────────▼─────────┐       ┌─────────────────┐
@@ -162,6 +164,19 @@ Spiders auto-detect and report: **OS** (name, version, ID), **kernel**, **archit
 - **PID safety** — Server-side validation rejects PID 0 and 1; only signals 1, 9, and 15 are allowed
 - **Expandable rows** — Click any process to see its full command line with arguments
 - **Color-coded metrics** — CPU and memory usage highlighted by severity (green → amber → red)
+
+### Log Streaming (Sound and Vision)
+
+- **Journal or file** — Toggle between `journalctl` (system journal) and `tail -f` (arbitrary log file) from a single modal
+- **Per-service filtering** — Optionally scope journal output to a specific systemd unit (e.g. `nginx.service`)
+- **Configurable history** — Choose how many initial lines to load (1–10,000, default 100)
+- **Live streaming** — Output streams in real time via 300ms polling with offset-based incremental delivery
+- **Pause / resume** — Freeze the display without killing the SSH session; resume catches up from where you left off
+- **Client-side filter** — Instant text search across all log lines while streaming
+- **Auto-scroll** — Scrolls to bottom on new output; disengages when you scroll up manually
+- **1MB buffer cap** — Server truncates old lines from the front at clean newline boundaries to prevent unbounded memory growth
+- **Input validation** — Service names validated against `[a-zA-Z0-9._@-]`; file paths must start with `/` and reject shell metacharacters
+- **Sudo support** — All commands wrapped with sudo for privileged journal entries and root-owned log files
 
 ### Ansible Integration (Ziggy)
 
@@ -488,6 +503,14 @@ Package actions: `check-updates`, `upgrade`, `full-upgrade`, `list-installed`, `
 | `GET` | `/api/processes/:id/list` | List all processes on a node (`ps aux`) |
 | `POST` | `/api/processes/:id/kill` | Send signal `{pid, signal}` (1=HUP, 9=KILL, 15=TERM) |
 
+### Log Streaming (Sound and Vision)
+
+| Method | Endpoint | Description |
+|:-------|:---------|:------------|
+| `POST` | `/api/logs/:id/start` | Start log stream `{source, service?, path?, lines?}`, returns `{job_id}` |
+| `GET` | `/api/logs/:id/poll?job=ID&offset=N` | Poll log output, returns `{output, offset, done, ok}` |
+| `POST` | `/api/logs/:id/stop` | Stop log stream `{job_id}` |
+
 ### Drift Detection
 
 | Method | Endpoint | Description |
@@ -503,7 +526,7 @@ Package actions: `check-updates`, `upgrade`, `full-upgrade`, `list-installed`, `
 
 | Method | Endpoint | Description |
 |:-------|:---------|:------------|
-| `GET` | `/api/capabilities` | Server feature flags (ansible, deployer, auth, fleet, services, processes, drift) |
+| `GET` | `/api/capabilities` | Server feature flags (ansible, deployer, auth, fleet, services, processes, drift, logs) |
 | `GET` | `/api/ansible/status` | Ansible version and availability |
 | `POST` | `/api/ansible/run` | Run playbook `{playbook, nodes?, requirements?}` |
 | `POST` | `/api/ansible/poll?job=ID&offset=N` | Poll playbook output |
@@ -571,6 +594,7 @@ stardust/
 │   │   ├── fleet.zig          # Starman (fleet command execution)
 │   │   ├── services.zig      # Life on Mars (service manager)
 │   │   ├── processes.zig     # Ashes to Ashes (process explorer)
+│   │   ├── logs.zig          # Sound and Vision (log streaming)
 │   │   ├── drift.zig         # Drift detection (SSH snapshots & parsing)
 │   │   └── ansible.zig       # Ziggy (Ansible integration)
 │   ├── agent/
@@ -599,6 +623,7 @@ stardust/
 │       │   ├── fleet-command-modal.tsx # Fleet command runner (Starman)
 │       │   ├── service-manager.tsx  # Service viewer/controller (Life on Mars)
 │       │   ├── process-explorer.tsx # Process viewer/killer (Ashes to Ashes)
+│       │   ├── log-viewer.tsx     # Log streamer (Sound and Vision)
 │       │   ├── ansible-modal.tsx   # Playbook runner
 │       │   ├── login-page.tsx
 │       │   └── profile-modal.tsx

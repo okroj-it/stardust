@@ -12,6 +12,7 @@ const AnsibleEngine = @import("ansible.zig").AnsibleEngine;
 const FleetEngine = @import("fleet.zig").FleetEngine;
 const ServiceEngine = @import("services.zig").ServiceEngine;
 const ProcessEngine = @import("processes.zig").ProcessEngine;
+const LogEngine = @import("logs.zig").LogEngine;
 const DriftEngine = @import("drift.zig").DriftEngine;
 const terminal_handler = @import("terminal_handler.zig");
 const embedded_ui = @import("embedded_ui");
@@ -187,6 +188,15 @@ pub fn main() !void {
         }
     }
 
+    // Init log streaming engine (requires crypto + db)
+    var logs: ?LogEngine = null;
+    if (crypto_engine) |*ce| {
+        if (db) |*d| {
+            logs = LogEngine.init(allocator, d, ce);
+            std.log.info("[SOUND AND VISION] Log streaming: enabled", .{});
+        }
+    }
+
     // Init drift detection engine (requires crypto + db)
     var drift: ?DriftEngine = null;
     if (crypto_engine) |*ce| {
@@ -252,6 +262,7 @@ pub fn main() !void {
     if (fleet) |*f| global_api.setFleet(f);
     if (services) |*s| global_api.setServices(s);
     if (processes) |*p| global_api.setProcesses(p);
+    if (logs) |*l| global_api.setLogs(l);
     if (drift) |*d| global_api.setDrift(d);
     global_api.setWsState(&ws_state);
 

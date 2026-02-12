@@ -8,6 +8,7 @@ import { TerminalModal } from "./terminal-modal"
 import { WebTerminal } from "./web-terminal"
 import { ServiceManager } from "./service-manager"
 import { ProcessExplorer } from "./process-explorer"
+import { LogViewer } from "./log-viewer"
 import type { NodeStatus, Capabilities } from "@/lib/api"
 import { deployStep, updateNodeTags, fetchAllTags } from "@/lib/api"
 import {
@@ -28,6 +29,7 @@ import {
   Server,
   RotateCw,
   SquareTerminal,
+  ScrollText,
   Cog,
   Tag,
 } from "lucide-react"
@@ -48,6 +50,7 @@ export function NodeDetail({ node, onClose, onRemove, onTagsChanged, capabilitie
   const [showReinstall, setShowReinstall] = useState(false)
   const [showServices, setShowServices] = useState(false)
   const [showProcesses, setShowProcesses] = useState(false)
+  const [showLogs, setShowLogs] = useState(false)
 
   const cpuHistory = history.map((h) => h.cpu.usage_percent)
   const memHistory = history.map((h) => h.memory.used_percent)
@@ -92,6 +95,15 @@ export function NodeDetail({ node, onClose, onRemove, onTagsChanged, capabilitie
               title="Processes"
             >
               <Activity className="w-4 h-4" />
+            </button>
+          )}
+          {capabilities?.logs && node.connected && (
+            <button
+              onClick={() => setShowLogs(true)}
+              className="p-2 rounded-lg hover:bg-emerald-500/10 text-muted-foreground hover:text-emerald-400 transition-colors"
+              title="Logs"
+            >
+              <ScrollText className="w-4 h-4" />
             </button>
           )}
           {capabilities?.services && node.connected && (
@@ -313,6 +325,14 @@ export function NodeDetail({ node, onClose, onRemove, onTagsChanged, capabilitie
           </InfoCard>
         )}
       </div>
+
+      {showLogs && (
+        <LogViewer
+          nodeId={nodeId}
+          nodeName={node.name}
+          onClose={() => setShowLogs(false)}
+        />
+      )}
 
       {showProcesses && (
         <ProcessExplorer
