@@ -7,7 +7,7 @@
 <p align="center">
   <em>A lightweight server monitoring & orchestration platform built in Zig.<br/>
   Deploy zero-dependency agents to your Linux fleet, collect real-time telemetry over WebSockets,<br/>
-  manage packages, and run Ansible playbooks — all from a single binary and a clean React dashboard.</em>
+  open interactive SSH terminals, manage packages, and run Ansible playbooks — all from a single binary and a clean React dashboard.</em>
 </p>
 
 <p align="center">
@@ -36,6 +36,7 @@ Every component draws from David Bowie's *Space Oddity* and *Ziggy Stardust* myt
 | Agent | **Spider** | Zero-dependency monitoring agent deployed to nodes | *"The Spiders from Mars"* |
 | Web UI | **The Capsule** | React dashboard for fleet overview and management | *"Sitting in a tin can, far above the world"* |
 | Deployer | **Major Tom** | SSH-based agent deployment & lifecycle manager | *"Commencing countdown, engines on"* |
+| Web Terminal | **Space Oddity** | Browser-based SSH terminal via PTY relay | *"Here am I floating round my tin can"* |
 | Ansible | **Ziggy** | Optional Ansible orchestration engine | *"Ziggy played guitar"* |
 
 ---
@@ -45,14 +46,15 @@ Every component draws from David Bowie's *Space Oddity* and *Ziggy Stardust* myt
 ```
                     ┌──────────────────┐
                     │   The Capsule    │
-                    │  React + Vite    │
+                    │  React + xterm   │
                     └────────┬─────────┘
-                             │ HTTPS
+                             │ HTTPS + WSS
                              ▼
                     ┌──────────────────┐       WebSocket (TLS)       ┌─────────────┐
                     │  Ground Control  │◄──────────────────────────►│   Spider     │
                     │    Zig + zap     │                             │  (per node)  │
                     │                  │──── SSH (Major Tom) ────►  │  zero-dep    │
+                    │                  │──── SSH PTY (Oddity) ───►  │              │
                     └────────┬─────────┘                             └─────────────┘
                              │
                     ┌────────▼─────────┐       ┌─────────────────┐
@@ -104,6 +106,15 @@ Spiders auto-detect and report: **OS** (name, version, ID), **kernel**, **archit
 - **Check for updates** — See available upgrades in a sortable table
 - **Upgrade / Full Upgrade** — Run upgrades with live streaming terminal output
 - **Cache refresh** — Update package indexes remotely
+
+### Web Terminal (Space Oddity)
+
+- **Browser-based SSH** — Full interactive shell directly from The Capsule, no local SSH client needed
+- **PTY relay** — Ground Control proxies WebSocket frames to SSH stdin/stdout with forced PTY allocation
+- **Nerd Font support** — Powerline glyphs and icons render correctly (loads symbol font from CDN as fallback)
+- **TUI-compatible** — `mc`, `htop`, `vim`, and other curses applications work out of the box (`TERM=xterm-256color`)
+- **Auto-sizing** — Terminal dimensions sync on connect and window resize
+- **Secure sessions** — JWT-authenticated, temporary key files (mode `0600`) cleaned up on disconnect, key material zeroed in memory
 
 ### Ansible Integration (Ziggy)
 
@@ -388,11 +399,18 @@ Package actions: `check-updates`, `upgrade`, `full-upgrade`
 | Endpoint | Description |
 |:---------|:------------|
 | `WS /ws` | Spider telemetry stream |
+| `WS /ws/terminal` | Interactive SSH terminal (Space Oddity) |
 
-Spider message types:
+Spider message types (`/ws`):
 - `auth` — `{type, agent_id, token, version}`
 - `sysinfo` — `{type, agent_id, os_id, arch, cpu_model, ...}`
 - `stats` — Full SystemStats JSON payload every 5 seconds
+
+Terminal protocol (`/ws/terminal`) — mixed text/binary framing:
+- **Client → Server** (text): `{type:"auth", token, node_id, cols, rows}` · `{type:"resize", cols, rows}`
+- **Client → Server** (binary): Raw terminal input (keystrokes)
+- **Server → Client** (text): `{type:"ready"}` · `{type:"error", message}` · `{type:"closed"}`
+- **Server → Client** (binary): Raw terminal output (PTY data)
 
 ---
 
@@ -406,6 +424,7 @@ Spider message types:
 | Crypto | `std.crypto` | bcrypt-pbkdf, AES-GCM-256, HMAC-SHA256 |
 | Frontend | [React 19](https://react.dev/) + [TypeScript 5.9](https://www.typescriptlang.org/) | Interactive dashboard |
 | Styling | [Tailwind CSS 4](https://tailwindcss.com/) | Utility-first dark theme |
+| Terminal | [xterm.js 6](https://xtermjs.org/) | Browser-based terminal emulator |
 | Icons | [Lucide](https://lucide.dev/) | Consistent icon set |
 | Animations | [Motion](https://motion.dev/) | Smooth UI transitions |
 | Build | [Vite 7](https://vite.dev/) | Frontend bundling and HMR |
@@ -427,6 +446,7 @@ stardust/
 │   │   ├── store.zig         # In-memory telemetry store
 │   │   ├── ws_handler.zig    # WebSocket handler
 │   │   ├── deployer.zig      # Major Tom (SSH deployment)
+│   │   ├── terminal_handler.zig # Space Oddity (web terminal)
 │   │   └── ansible.zig       # Ziggy (Ansible integration)
 │   ├── agent/
 │   │   ├── main.zig          # Spider entry point
@@ -449,6 +469,7 @@ stardust/
 │       │   ├── add-node-modal.tsx  # Onboarding wizard
 │       │   ├── remove-node-modal.tsx
 │       │   ├── terminal-modal.tsx  # Package management
+│       │   ├── web-terminal.tsx   # SSH terminal (Space Oddity)
 │       │   ├── ansible-modal.tsx   # Playbook runner
 │       │   ├── login-page.tsx
 │       │   └── profile-modal.tsx
