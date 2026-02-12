@@ -105,6 +105,23 @@ From The Capsule, click **Add Node** and provide:
 
 Major Tom will SSH in, upload the Spider binary, install a systemd service, and establish the WebSocket connection back to Ground Control.
 
+### TLS / Reverse Proxy
+
+Ground Control binds plain HTTP internally. In production, put it behind a TLS-terminating reverse proxy (e.g. [Traefik](https://traefik.io/), nginx, Caddy) so that:
+
+- The Capsule is served over HTTPS
+- Spiders connect via `wss://` (TLS WebSocket) rather than plain `ws://`
+- Auth tokens and SSH credentials are never sent in the clear
+
+Pass the `--server-url` flag with your public `wss://` endpoint — this is the address baked into each Spider's config at deploy time.
+
+```bash
+# Example: Ground Control on port 8933, Traefik terminates TLS on 443
+./stardust-server --port 8933 --server-url wss://stardust.example.com/ws ...
+```
+
+Note: WebSocket upgrade requires HTTP/1.1. If your proxy defaults to h2, make sure the `/ws` route falls back to HTTP/1.1.
+
 ## Tech Stack
 
 | Layer | Technology |
