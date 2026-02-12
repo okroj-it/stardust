@@ -29,7 +29,7 @@ pub fn build(b: *std.Build) void {
     });
     agent_mod.addImport("common", common_mod);
     const agent = b.addExecutable(.{
-        .name = "sroolify-agent",
+        .name = "stardust-spider",
         .root_module = agent_mod,
     });
     b.installArtifact(agent);
@@ -58,7 +58,7 @@ pub fn build(b: *std.Build) void {
     server_mod.addImport("zqlite", zqlite_dep.module("zqlite"));
     server_mod.addImport("embedded_ui", embedded_ui_mod);
     const server = b.addExecutable(.{
-        .name = "sroolify-server",
+        .name = "stardust-server",
         .root_module = server_mod,
     });
     // Server compilation depends on frontend build (for @embedFile)

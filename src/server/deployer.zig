@@ -93,7 +93,7 @@ pub const Deployer = struct {
     ) CheckResult {
         _ = sudo_pass;
         // Write temp key file
-        const tmp_key_path = std.fmt.allocPrint(self.allocator, "/tmp/sroolify_check_{d}", .{std.time.milliTimestamp()}) catch
+        const tmp_key_path = std.fmt.allocPrint(self.allocator, "/tmp/stardust_check_{d}", .{std.time.milliTimestamp()}) catch
             return .{ .connected = false, .arch = null, .agent_available = false, .message = "internal error" };
         defer self.allocator.free(tmp_key_path);
         self.writeTempKey(tmp_key_path, ssh_key) catch
@@ -166,7 +166,7 @@ pub const Deployer = struct {
         // Determine which binary to upload (arch-specific or default)
         const binary_path = self.agent_binary_path;
 
-        const scp_dest = std.fmt.allocPrint(self.allocator, "{s}:/tmp/sroolify-agent", .{ctx.host_arg}) catch
+        const scp_dest = std.fmt.allocPrint(self.allocator, "{s}:/tmp/stardust-spider", .{ctx.host_arg}) catch
             return .{ .ok = false, .message = "internal error" };
         defer self.allocator.free(scp_dest);
 
@@ -176,10 +176,10 @@ pub const Deployer = struct {
             "-o", "ConnectTimeout=30",
             binary_path, scp_dest,
         }) catch
-            return .{ .ok = false, .message = "failed to upload agent binary" };
+            return .{ .ok = false, .message = "Circuit's dead — failed to upload Spider binary" };
 
         self.db.updateNodeStatus(node_id, "deploying") catch {};
-        return .{ .ok = true, .message = "agent binary uploaded" };
+        return .{ .ok = true, .message = "Major Tom stepping through the door" };
     }
 
     /// Step 2: Install agent — move binary + create systemd service.
@@ -195,15 +195,15 @@ pub const Deployer = struct {
 
         // Move binary into place
         self.runSudoSsh(ctx.tmp_key_path, ctx.port_str, ctx.host_arg, ctx.sudo_pass,
-            "mv /tmp/sroolify-agent /usr/local/bin/sroolify-agent && chmod +x /usr/local/bin/sroolify-agent") catch
-            return .{ .ok = false, .message = "failed to install binary — check sudo permissions" };
+            "mv /tmp/stardust-spider /usr/local/bin/stardust-spider && chmod +x /usr/local/bin/stardust-spider") catch
+            return .{ .ok = false, .message = "Circuit's dead — failed to install binary" };
 
         // Generate and upload systemd unit
         const unit_content = self.generateUnit(node_id, node.?.agent_token) catch
             return .{ .ok = false, .message = "internal error generating service unit" };
         defer self.allocator.free(unit_content);
 
-        const tmp_unit_path = std.fmt.allocPrint(self.allocator, "/tmp/sroolify_unit_{s}", .{node_id}) catch
+        const tmp_unit_path = std.fmt.allocPrint(self.allocator, "/tmp/stardust_unit_{s}", .{node_id}) catch
             return .{ .ok = false, .message = "internal error" };
         defer self.allocator.free(tmp_unit_path);
         {
@@ -215,7 +215,7 @@ pub const Deployer = struct {
         }
         defer std.fs.cwd().deleteFile(tmp_unit_path) catch {};
 
-        const unit_dest = std.fmt.allocPrint(self.allocator, "{s}:/tmp/sroolify-agent.service", .{ctx.host_arg}) catch
+        const unit_dest = std.fmt.allocPrint(self.allocator, "{s}:/tmp/stardust-spider.service", .{ctx.host_arg}) catch
             return .{ .ok = false, .message = "internal error" };
         defer self.allocator.free(unit_dest);
 
@@ -228,10 +228,10 @@ pub const Deployer = struct {
 
         // Install and enable
         self.runSudoSsh(ctx.tmp_key_path, ctx.port_str, ctx.host_arg, ctx.sudo_pass,
-            "mv /tmp/sroolify-agent.service /etc/systemd/system/sroolify-agent.service && systemctl daemon-reload && systemctl enable sroolify-agent") catch
-            return .{ .ok = false, .message = "failed to install systemd service — check sudo permissions" };
+            "mv /tmp/stardust-spider.service /etc/systemd/system/stardust-spider.service && systemctl daemon-reload && systemctl enable stardust-spider") catch
+            return .{ .ok = false, .message = "Circuit's dead — failed to install service" };
 
-        return .{ .ok = true, .message = "service installed" };
+        return .{ .ok = true, .message = "Major Tom's circuits are go" };
     }
 
     /// Step 3: Start the agent service.
@@ -241,18 +241,18 @@ pub const Deployer = struct {
         defer ctx.deinit(self);
 
         self.runSudoSsh(ctx.tmp_key_path, ctx.port_str, ctx.host_arg, ctx.sudo_pass,
-            "systemctl restart sroolify-agent") catch
-            return .{ .ok = false, .message = "failed to start service" };
+            "systemctl restart stardust-spider") catch
+            return .{ .ok = false, .message = "Circuit's dead — failed to start Spider" };
 
         // Brief pause then check if it's still running
         std.Thread.sleep(2 * std.time.ns_per_s);
 
         self.runSudoSsh(ctx.tmp_key_path, ctx.port_str, ctx.host_arg, ctx.sudo_pass,
-            "systemctl is-active sroolify-agent") catch
-            return .{ .ok = false, .message = "service started but exited immediately — check agent logs" };
+            "systemctl is-active stardust-spider") catch
+            return .{ .ok = false, .message = "Something's wrong — Spider launched but went silent" };
 
         self.db.updateNodeStatus(node_id, "online") catch {};
-        return .{ .ok = true, .message = "service running" };
+        return .{ .ok = true, .message = "Major Tom has landed" };
     }
 
     /// Full deploy (all steps). Used for backwards compat / background deploy.
@@ -262,17 +262,17 @@ pub const Deployer = struct {
 
         var r = self.stepUploadBinary(node_id);
         if (!r.ok) {
-            std.log.err("deploy upload failed: {s}", .{r.message});
+            std.log.err("[MAJOR TOM] Upload failed: {s}", .{r.message});
             return error.SshFailed;
         }
         r = self.stepInstallService(node_id);
         if (!r.ok) {
-            std.log.err("deploy install failed: {s}", .{r.message});
+            std.log.err("[MAJOR TOM] Install failed: {s}", .{r.message});
             return error.SshFailed;
         }
         r = self.stepStartService(node_id);
         if (!r.ok) {
-            std.log.err("deploy start failed: {s}", .{r.message});
+            std.log.err("[MAJOR TOM] Start failed: {s}", .{r.message});
             return error.SshFailed;
         }
     }
@@ -284,9 +284,9 @@ pub const Deployer = struct {
         defer ctx.deinit(self);
 
         self.runSshRaw(ctx.tmp_key_path, ctx.port_str, ctx.host_arg, "echo ok") catch
-            return .{ .ok = false, .message = "SSH connection failed — node unreachable" };
+            return .{ .ok = false, .message = "Can you hear me, Major Tom? — node unreachable" };
 
-        return .{ .ok = true, .message = "connected" };
+        return .{ .ok = true, .message = "Signal acquired" };
     }
 
     /// Offboard: stop the agent service.
@@ -296,10 +296,10 @@ pub const Deployer = struct {
         defer ctx.deinit(self);
 
         self.runSudoSsh(ctx.tmp_key_path, ctx.port_str, ctx.host_arg, ctx.sudo_pass,
-            "systemctl stop sroolify-agent") catch
+            "systemctl stop stardust-spider") catch
             return .{ .ok = false, .message = "failed to stop service" };
 
-        return .{ .ok = true, .message = "service stopped" };
+        return .{ .ok = true, .message = "Spider standing down" };
     }
 
     /// Offboard: verify the service is stopped.
@@ -310,7 +310,7 @@ pub const Deployer = struct {
 
         // is-active returns non-zero for inactive/dead — that's what we WANT
         const active = self.runSshRawOutput(ctx.tmp_key_path, ctx.port_str, ctx.host_arg,
-            "systemctl is-active sroolify-agent 2>/dev/null || echo inactive");
+            "systemctl is-active stardust-spider 2>/dev/null || echo inactive");
         defer if (active) |a| self.allocator.free(a);
 
         if (active) |output| {
@@ -329,10 +329,10 @@ pub const Deployer = struct {
         defer ctx.deinit(self);
 
         self.runSudoSsh(ctx.tmp_key_path, ctx.port_str, ctx.host_arg, ctx.sudo_pass,
-            "systemctl disable sroolify-agent 2>/dev/null; rm -f /etc/systemd/system/sroolify-agent.service; systemctl daemon-reload") catch
+            "systemctl disable stardust-spider 2>/dev/null; rm -f /etc/systemd/system/stardust-spider.service; systemctl daemon-reload") catch
             return .{ .ok = false, .message = "failed to uninstall service" };
 
-        return .{ .ok = true, .message = "service uninstalled" };
+        return .{ .ok = true, .message = "Service file removed from orbit" };
     }
 
     /// Offboard: verify the service file is gone.
@@ -343,7 +343,7 @@ pub const Deployer = struct {
 
         // test -f returns 0 if file exists — we want it to NOT exist
         const output = self.runSshRawOutput(ctx.tmp_key_path, ctx.port_str, ctx.host_arg,
-            "test -f /etc/systemd/system/sroolify-agent.service && echo exists || echo gone");
+            "test -f /etc/systemd/system/stardust-spider.service && echo exists || echo gone");
         defer if (output) |o| self.allocator.free(o);
 
         if (output) |o| {
@@ -352,7 +352,7 @@ pub const Deployer = struct {
                 return .{ .ok = false, .message = "service file still exists" };
             }
         }
-        return .{ .ok = true, .message = "service file removed" };
+        return .{ .ok = true, .message = "All clear — no traces in orbit" };
     }
 
     /// Offboard: remove the agent binary.
@@ -362,10 +362,10 @@ pub const Deployer = struct {
         defer ctx.deinit(self);
 
         self.runSudoSsh(ctx.tmp_key_path, ctx.port_str, ctx.host_arg, ctx.sudo_pass,
-            "rm -f /usr/local/bin/sroolify-agent") catch
-            return .{ .ok = false, .message = "failed to remove binary" };
+            "rm -f /usr/local/bin/stardust-spider") catch
+            return .{ .ok = false, .message = "Failed to remove Spider binary" };
 
-        return .{ .ok = true, .message = "binary removed" };
+        return .{ .ok = true, .message = "Spider binary jettisoned" };
     }
 
     /// Offboard: verify the binary is gone.
@@ -375,16 +375,16 @@ pub const Deployer = struct {
         defer ctx.deinit(self);
 
         const output = self.runSshRawOutput(ctx.tmp_key_path, ctx.port_str, ctx.host_arg,
-            "test -f /usr/local/bin/sroolify-agent && echo exists || echo gone");
+            "test -f /usr/local/bin/stardust-spider && echo exists || echo gone");
         defer if (output) |o| self.allocator.free(o);
 
         if (output) |o| {
             const trimmed = std.mem.trimRight(u8, o, "\n \t\r");
             if (std.mem.eql(u8, trimmed, "exists")) {
-                return .{ .ok = false, .message = "binary still exists" };
+                return .{ .ok = false, .message = "Spider binary still present" };
             }
         }
-        return .{ .ok = true, .message = "binary removed" };
+        return .{ .ok = true, .message = "All clear — Spider fully deorbited" };
     }
 
     /// Undeploy: stop and remove agent from remote node (legacy single-shot).
@@ -393,12 +393,12 @@ pub const Deployer = struct {
         defer ctx.deinit(self);
 
         self.runSudoSsh(ctx.tmp_key_path, ctx.port_str, ctx.host_arg, ctx.sudo_pass,
-            "systemctl stop sroolify-agent; systemctl disable sroolify-agent; rm -f /etc/systemd/system/sroolify-agent.service /usr/local/bin/sroolify-agent; systemctl daemon-reload") catch |err| {
-            std.log.warn("deployer: undeploy ssh failed for {s}: {}", .{ node_id, err });
+            "systemctl stop stardust-spider; systemctl disable stardust-spider; rm -f /etc/systemd/system/stardust-spider.service /usr/local/bin/stardust-spider; systemctl daemon-reload") catch |err| {
+            std.log.warn("[MAJOR TOM] undeploy ssh failed for {s}: {}", .{ node_id, err });
         };
 
         self.db.deleteNode(node_id) catch {};
-        std.log.info("deployer: agent undeployed from {s}", .{node_id});
+        std.log.info("[MAJOR TOM] Spider deorbited from {s}", .{node_id});
     }
 
     // --- Internal helpers ---
@@ -443,7 +443,7 @@ pub const Deployer = struct {
             }
         }
 
-        const tmp_key_path = try std.fmt.allocPrint(self.allocator, "/tmp/sroolify_key_{s}", .{node_id});
+        const tmp_key_path = try std.fmt.allocPrint(self.allocator, "/tmp/stardust_key_{s}", .{node_id});
         errdefer self.allocator.free(tmp_key_path);
         try self.writeTempKey(tmp_key_path, ssh_key);
 
@@ -469,7 +469,7 @@ pub const Deployer = struct {
     }
 
     fn hasAgentBinary(self: *Deployer, arch: []const u8) bool {
-        // Check arch-specific: e.g. sroolify-agent-x86_64
+        // Check arch-specific: e.g. stardust-spider-x86_64
         const arch_specific = std.fmt.allocPrint(self.allocator, "{s}-{s}", .{ self.agent_binary_path, arch }) catch return false;
         defer self.allocator.free(arch_specific);
         if (std.fs.cwd().access(arch_specific, .{})) |_| return true else |_| {}
@@ -539,7 +539,7 @@ pub const Deployer = struct {
     /// Detect the package manager on a node.
     pub fn stepDetectPkgManager(self: *Deployer, node_id: []const u8) StepResult {
         const ctx = self.setupSshContext(node_id) catch |err| {
-            std.log.err("deployer: detect-pkg-manager setup failed: {}", .{err});
+            std.log.err("[MAJOR TOM] detect-pkg-manager setup failed: {}", .{err});
             return .{ .ok = false, .message = sshSetupError(err) };
         };
         defer ctx.deinit(self);
@@ -549,18 +549,18 @@ pub const Deployer = struct {
         defer if (output) |o| self.allocator.free(o);
 
         if (output) |o| {
-            std.log.info("deployer: detect-pkg-manager raw output ({d} bytes): '{s}'", .{ o.len, o[0..@min(o.len, 200)] });
+            std.log.info("[MAJOR TOM] detect-pkg-manager raw output ({d} bytes): '{s}'", .{ o.len, o[0..@min(o.len, 200)] });
             const managers = [_][]const u8{ "apt", "dnf", "yum", "pacman", "apk" };
             const trimmed = std.mem.trimRight(u8, o, "\n \t\r");
             const last_newline = std.mem.lastIndexOf(u8, trimmed, "\n");
             const last_line = if (last_newline) |pos| std.mem.trimLeft(u8, trimmed[pos + 1 ..], " \t") else trimmed;
-            std.log.info("deployer: detect-pkg-manager last_line: '{s}'", .{last_line});
+            std.log.info("[MAJOR TOM] detect-pkg-manager last_line: '{s}'", .{last_line});
 
             for (managers) |mgr| {
                 if (std.mem.eql(u8, last_line, mgr)) return .{ .ok = true, .message = mgr };
             }
         } else {
-            std.log.err("deployer: detect-pkg-manager SSH returned null output", .{});
+            std.log.err("[MAJOR TOM] detect-pkg-manager SSH returned null output", .{});
         }
         return .{ .ok = false, .message = "unknown package manager" };
     }
@@ -652,6 +652,130 @@ pub const Deployer = struct {
             };
 
         // Spawn thread to run the command and stream output
+        const thread_ctx = self.allocator.create(StreamThreadCtx) catch {
+            self.allocator.free(wrapped);
+            ctx.deinit(self);
+            return null;
+        };
+        thread_ctx.* = .{
+            .job = job,
+            .allocator = self.allocator,
+            .key_path = ctx.tmp_key_path,
+            .port = ctx.port_str,
+            .host_arg = ctx.host_arg,
+            .ssh_key = ctx.ssh_key,
+            .sudo_pass = ctx.sudo_pass,
+            .wrapped_cmd = wrapped,
+        };
+
+        const thread = std.Thread.spawn(.{}, streamWorker, .{thread_ctx}) catch {
+            self.allocator.free(wrapped);
+            self.allocator.destroy(thread_ctx);
+            ctx.deinit(self);
+            return null;
+        };
+        thread.detach();
+
+        return job_id;
+    }
+
+    /// Start a streaming package job (check-updates, upgrade, full-upgrade).
+    /// Returns a job ID or null on failure.
+    pub fn startPkgJob(self: *Deployer, node_id: []const u8, pkg_manager: []const u8, action: []const u8) ?[]const u8 {
+        const ctx = self.setupSshContext(node_id) catch return null;
+
+        const command: ?[]const u8 = if (std.mem.eql(u8, action, "check-updates")) blk: {
+            break :blk if (std.mem.eql(u8, pkg_manager, "apt"))
+                "apt-get update >/dev/null 2>&1 && apt-get upgrade -s"
+            else if (std.mem.eql(u8, pkg_manager, "dnf"))
+                "dnf check-update --quiet; true"
+            else if (std.mem.eql(u8, pkg_manager, "yum"))
+                "yum check-update --quiet; true"
+            else if (std.mem.eql(u8, pkg_manager, "pacman"))
+                "pacman -Sy >/dev/null 2>&1 && pacman -Qu; true"
+            else if (std.mem.eql(u8, pkg_manager, "apk"))
+                "apk update >/dev/null 2>&1 && apk upgrade -s"
+            else
+                null;
+        } else if (std.mem.eql(u8, action, "upgrade")) blk: {
+            break :blk if (std.mem.eql(u8, pkg_manager, "apt"))
+                "DEBIAN_FRONTEND=noninteractive apt-get upgrade -y"
+            else if (std.mem.eql(u8, pkg_manager, "dnf"))
+                "dnf upgrade --nobest -y"
+            else if (std.mem.eql(u8, pkg_manager, "yum"))
+                "yum update -y"
+            else if (std.mem.eql(u8, pkg_manager, "pacman"))
+                "pacman -Syu --noconfirm"
+            else if (std.mem.eql(u8, pkg_manager, "apk"))
+                "apk upgrade"
+            else
+                null;
+        } else if (std.mem.eql(u8, action, "full-upgrade")) blk: {
+            break :blk if (std.mem.eql(u8, pkg_manager, "apt"))
+                "DEBIAN_FRONTEND=noninteractive apt-get full-upgrade -y"
+            else if (std.mem.eql(u8, pkg_manager, "dnf"))
+                "dnf upgrade -y"
+            else if (std.mem.eql(u8, pkg_manager, "yum"))
+                "yum update -y"
+            else if (std.mem.eql(u8, pkg_manager, "pacman"))
+                "pacman -Syu --noconfirm"
+            else if (std.mem.eql(u8, pkg_manager, "apk"))
+                "apk upgrade --available"
+            else
+                null;
+        } else null;
+
+        if (command == null) {
+            ctx.deinit(self);
+            return null;
+        }
+
+        return self.startStreamJob(ctx, command.?);
+    }
+
+    /// Internal: start a streaming SSH job given a prepared SSH context and command.
+    fn startStreamJob(self: *Deployer, ctx: SshContext, command: []const u8) ?[]const u8 {
+        const job = self.allocator.create(StreamJob) catch {
+            ctx.deinit(self);
+            return null;
+        };
+        job.* = .{ .allocator = self.allocator };
+
+        var id_bytes: [8]u8 = undefined;
+        std.crypto.random.bytes(&id_bytes);
+        var hex_buf: [16]u8 = undefined;
+        const hex = std.fmt.bufPrint(&hex_buf, "{x:0>16}", .{std.mem.readInt(u64, &id_bytes, .big)}) catch {
+            self.allocator.destroy(job);
+            ctx.deinit(self);
+            return null;
+        };
+        const job_id = self.allocator.dupe(u8, hex) catch {
+            self.allocator.destroy(job);
+            ctx.deinit(self);
+            return null;
+        };
+
+        self.jobs_mu.lock();
+        self.jobs.put(self.allocator, job_id, job) catch {
+            self.jobs_mu.unlock();
+            self.allocator.free(job_id);
+            self.allocator.destroy(job);
+            ctx.deinit(self);
+            return null;
+        };
+        self.jobs_mu.unlock();
+
+        const wrapped = if (ctx.sudo_pass) |pass|
+            std.fmt.allocPrint(self.allocator, "echo '{s}' | sudo -S bash -c '{s}' 2>&1", .{ pass, command }) catch {
+                ctx.deinit(self);
+                return null;
+            }
+        else
+            std.fmt.allocPrint(self.allocator, "sudo bash -c '{s}' 2>&1", .{command}) catch {
+                ctx.deinit(self);
+                return null;
+            };
+
         const thread_ctx = self.allocator.create(StreamThreadCtx) catch {
             self.allocator.free(wrapped);
             ctx.deinit(self);
@@ -801,12 +925,12 @@ pub const Deployer = struct {
             },
             .max_output_bytes = 4096,
         }) catch |err| {
-            std.log.err("deployer: runSshRawOutput spawn failed: {}", .{err});
+            std.log.err("[MAJOR TOM] runSshRawOutput spawn failed: {}", .{err});
             return null;
         };
         defer self.allocator.free(result.stderr);
         if (result.stderr.len > 0) {
-            std.log.info("deployer: runSshRawOutput stderr: '{s}'", .{result.stderr[0..@min(result.stderr.len, 200)]});
+            std.log.info("[MAJOR TOM] runSshRawOutput stderr: '{s}'", .{result.stderr[0..@min(result.stderr.len, 200)]});
         }
         // Return stdout regardless of exit code (check commands may exit non-zero)
         return result.stdout;
@@ -829,14 +953,14 @@ pub const Deployer = struct {
             .argv = argv,
             .max_output_bytes = 64 * 1024,
         }) catch |err| {
-            std.log.err("deployer: failed to spawn process: {}", .{err});
+            std.log.err("[MAJOR TOM] failed to spawn process: {}", .{err});
             return error.SshFailed;
         };
         defer self.allocator.free(result.stdout);
         defer self.allocator.free(result.stderr);
 
         if (result.term.Exited != 0) {
-            std.log.err("deployer: command exited {d}: {s}", .{ result.term.Exited, result.stderr });
+            std.log.err("[MAJOR TOM] command exited {d}: {s}", .{ result.term.Exited, result.stderr });
             return error.SshFailed;
         }
     }
@@ -844,13 +968,13 @@ pub const Deployer = struct {
     fn generateUnit(self: *Deployer, node_id: []const u8, token: []const u8) ![]u8 {
         return std.fmt.allocPrint(self.allocator,
             \\[Unit]
-            \\Description=Sroolify Monitoring Agent
+            \\Description=Stardust Spider Agent
             \\After=network-online.target
             \\Wants=network-online.target
             \\
             \\[Service]
             \\Type=simple
-            \\ExecStart=/usr/local/bin/sroolify-agent --server {s} --token {s} --agent-id {s}
+            \\ExecStart=/usr/local/bin/stardust-spider --server {s} --token {s} --agent-id {s}
             \\Restart=always
             \\RestartSec=5
             \\StandardOutput=journal

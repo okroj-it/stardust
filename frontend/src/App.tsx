@@ -76,9 +76,9 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
             </div>
             <div>
               <h1 className="text-2xl font-bold tracking-tight bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text">
-                sroolify
+                Stardust
               </h1>
-              <p className="text-xs text-muted-foreground">Infrastructure Monitoring</p>
+              <p className="text-xs text-muted-foreground">Orchestrating the Spiders from Mars</p>
             </div>
           </div>
 
@@ -192,13 +192,13 @@ function EmptyState() {
       <div className="p-4 rounded-2xl bg-muted/30 mb-6">
         <Activity className="w-10 h-10 text-muted-foreground" />
       </div>
-      <h3 className="text-lg font-semibold mb-2">No Nodes Connected</h3>
+      <h3 className="text-lg font-semibold mb-2">No Spiders Connected</h3>
       <p className="text-sm text-muted-foreground max-w-md mb-6">
-        Start a sroolify-agent on any server to see live system metrics here.
-        Agents automatically connect via WebSocket and begin streaming data.
+        Deploy a Spider to any server to see live system metrics here.
+        Spiders automatically connect via WebSocket and begin streaming telemetry.
       </p>
       <div className="p-4 rounded-lg bg-card/50 border border-border/50 font-mono text-xs text-muted-foreground max-w-lg text-left">
-        <span className="text-emerald-400">$</span> ./sroolify-agent --server ws://this-server:8080/ws \<br />
+        <span className="text-emerald-400">$</span> ./stardust-spider --server wss://your-server/ws \<br />
         &nbsp;&nbsp;--token your-token --agent-id my-server
       </div>
     </div>

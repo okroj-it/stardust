@@ -11,11 +11,12 @@ const Auth = @import("auth.zig").Auth;
 const embedded_ui = @import("embedded_ui");
 
 const version = "0.1.0";
+const codename = "Ground Control";
 
 const Args = struct {
     port: u16 = 8080,
-    db_path: [:0]const u8 = "sroolify.db",
-    agent_binary: []const u8 = "zig-out/bin/sroolify-agent",
+    db_path: [:0]const u8 = "stardust.db",
+    agent_binary: []const u8 = "zig-out/bin/stardust-spider",
     server_url: []const u8 = "ws://localhost:8080/ws",
 };
 
@@ -66,10 +67,11 @@ pub fn main() !void {
 
     const args = parseArgs();
 
-    std.log.info("sroolify-server v{s} starting on port {d}", .{ version, args.port });
+    std.log.info("[GROUND CONTROL] Stardust v{s} — Commencing countdown, engines on.", .{version});
+    std.log.info("[GROUND CONTROL] Binding to port {d}", .{args.port});
 
-    // Init crypto from SROOLIFY_SECRET env var
-    const secret = std.posix.getenv("SROOLIFY_SECRET");
+    // Init crypto from STARDUST_SECRET env var
+    const secret = std.posix.getenv("STARDUST_SECRET");
     var crypto_engine: ?CryptoEngine = null;
     if (secret) |s| {
         if (s.len >= 16) {
@@ -77,12 +79,12 @@ pub fn main() !void {
                 std.log.err("crypto init failed: {}", .{err});
                 return;
             };
-            std.log.info("crypto engine initialized (bcrypt-pbkdf)", .{});
+            std.log.info("[GROUND CONTROL] Crypto engine online (bcrypt-pbkdf)", .{});
         } else {
-            std.log.warn("SROOLIFY_SECRET too short (need >= 16 chars), crypto disabled", .{});
+            std.log.warn("STARDUST_SECRET too short (need >= 16 chars), crypto disabled", .{});
         }
     } else {
-        std.log.warn("SROOLIFY_SECRET not set, node deployment disabled", .{});
+        std.log.warn("STARDUST_SECRET not set, node deployment disabled", .{});
     }
 
     // Init database
@@ -94,7 +96,7 @@ pub fn main() !void {
     defer if (db) |*d| d.deinit();
 
     if (db != null) {
-        std.log.info("database initialized at {s}", .{args.db_path});
+        std.log.info("[GROUND CONTROL] Database online at {s}", .{args.db_path});
     }
 
     // Init store
@@ -104,6 +106,7 @@ pub fn main() !void {
     // Init WebSocket state
     var ws_state = ws_handler.WsState.init(allocator, &store);
     defer ws_state.deinit();
+    if (db) |*d| ws_state.db = d;
 
     // Load tokens from DB if available
     if (db) |*d| {
@@ -113,7 +116,7 @@ pub fn main() !void {
             ws_state.addToken(entry.agent_id, entry.token) catch {};
         }
         if (tokens.len > 0) {
-            std.log.info("loaded {d} agent tokens from database", .{tokens.len});
+            std.log.info("[GROUND CONTROL] Loaded {d} Spider tokens", .{tokens.len});
         }
     }
 
@@ -125,7 +128,7 @@ pub fn main() !void {
     if (crypto_engine) |*ce| {
         if (db) |*d| {
             deployer = Deployer.init(allocator, d, ce, args.server_url, args.agent_binary);
-            std.log.info("deployer initialized (binary: {s})", .{args.agent_binary});
+            std.log.info("[MAJOR TOM] Deployer ready (binary: {s})", .{args.agent_binary});
         }
     }
 
@@ -138,10 +141,10 @@ pub fn main() !void {
             // Seed admin user on first run
             const user_count = d.getUserCount() catch 0;
             if (user_count == 0) {
-                const admin_user = std.posix.getenv("SROOLIFY_ADMIN_USER") orelse "admin";
-                const admin_pass = std.posix.getenv("SROOLIFY_ADMIN_PASS") orelse "admin";
+                const admin_user = std.posix.getenv("STARDUST_ADMIN_USER") orelse "admin";
+                const admin_pass = std.posix.getenv("STARDUST_ADMIN_PASS") orelse "admin";
                 if (std.mem.eql(u8, admin_pass, "admin")) {
-                    std.log.warn("using default admin password — set SROOLIFY_ADMIN_PASS in production!", .{});
+                    std.log.warn("using default admin password — set STARDUST_ADMIN_PASS in production!", .{});
                 }
                 const hash = Auth.hashPassword(admin_pass) catch |err| blk: {
                     std.log.err("failed to hash admin password: {}", .{err});
@@ -151,14 +154,14 @@ pub fn main() !void {
                     d.insertUser(admin_user, &h) catch |err| {
                         std.log.err("failed to create admin user: {}", .{err});
                     };
-                    std.log.info("created initial admin user '{s}'", .{admin_user});
+            std.log.info("[GROUND CONTROL] Created initial admin user '{s}'", .{admin_user});
                 }
             }
-            std.log.info("dashboard auth: enabled", .{});
+            std.log.info("[GROUND CONTROL] Capsule auth: enabled", .{});
         }
     }
     if (auth == null) {
-        std.log.warn("dashboard auth: disabled (requires SROOLIFY_SECRET)", .{});
+        std.log.warn("[GROUND CONTROL] Capsule auth: disabled (requires STARDUST_SECRET)", .{});
     }
 
     // Init API handler
@@ -167,6 +170,7 @@ pub fn main() !void {
     if (crypto_engine) |*ce| global_api.setCrypto(ce);
     if (deployer) |*dep| global_api.setDeployer(dep);
     if (auth) |*a| global_api.setAuth(a);
+    global_api.setWsState(&ws_state);
 
     // Init WebSocket settings
     global_ws_settings = ws_handler.getSettings(&ws_state);
@@ -183,12 +187,12 @@ pub fn main() !void {
 
     try listener.listen();
 
-    std.log.info("server listening on http://localhost:{d}", .{args.port});
-    std.log.info("WebSocket endpoint: ws://localhost:{d}/ws", .{args.port});
+    std.log.info("[GROUND CONTROL] Listening on http://localhost:{d}", .{args.port});
+    std.log.info("[GROUND CONTROL] WebSocket relay: ws://localhost:{d}/ws", .{args.port});
     if (crypto_engine != null and db != null) {
-        std.log.info("node deployment: enabled", .{});
+        std.log.info("[GROUND CONTROL] Major Tom deployment: enabled", .{});
     } else {
-        std.log.info("node deployment: disabled (set SROOLIFY_SECRET to enable)", .{});
+        std.log.info("[GROUND CONTROL] Major Tom deployment: disabled (set STARDUST_SECRET)", .{});
     }
 
     // This blocks — runs the event loop
@@ -224,19 +228,21 @@ fn parseArgs() Args {
 
 fn printUsage() void {
     std.fs.File.stderr().writeAll(
-        \\Usage: sroolify-server [OPTIONS]
+        \\Usage: stardust-server [OPTIONS]
+        \\
+        \\  Stardust — Orchestrating the Spiders from Mars.
         \\
         \\Options:
         \\  --port PORT          HTTP/WS port (default: 8080)
-        \\  --db PATH            SQLite database path (default: sroolify.db)
-        \\  --agent-binary PATH  Path to agent binary for deployment
-        \\  --server-url URL     Server WS URL for agent config (default: ws://localhost:8080/ws)
+        \\  --db PATH            SQLite database path (default: stardust.db)
+        \\  --agent-binary PATH  Path to Spider binary for deployment
+        \\  --server-url URL     Server WS URL for Spider config (default: ws://localhost:8080/ws)
         \\  -h, --help           Show this help
         \\
         \\Environment:
-        \\  SROOLIFY_SECRET      Master encryption secret (>= 16 chars, required for deployment + auth)
-        \\  SROOLIFY_ADMIN_USER  Initial admin username (default: admin)
-        \\  SROOLIFY_ADMIN_PASS  Initial admin password (default: admin)
+        \\  STARDUST_SECRET      Master encryption secret (>= 16 chars, required for deployment + auth)
+        \\  STARDUST_ADMIN_USER  Initial admin username (default: admin)
+        \\  STARDUST_ADMIN_PASS  Initial admin password (default: admin)
         \\
     ) catch {};
 }

@@ -16,6 +16,8 @@ ui/
 # Editor / IDE
 .claude/
 .agents/
+CLAUDE.md
+*.tmp.*
 
 # OS
 .DS_Store

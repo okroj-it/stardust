@@ -6,6 +6,7 @@ const CryptoEngine = @import("crypto.zig").CryptoEngine;
 const deployer_mod = @import("deployer.zig");
 const Deployer = deployer_mod.Deployer;
 const Auth = @import("auth.zig").Auth;
+const WsState = @import("ws_handler.zig").WsState;
 
 pub const Api = struct {
     allocator: std.mem.Allocator,
@@ -14,6 +15,7 @@ pub const Api = struct {
     crypto: ?*const CryptoEngine,
     deployer: ?*Deployer,
     auth: ?*const Auth = null,
+    ws_state: ?*WsState = null,
 
     pub fn init(allocator: std.mem.Allocator, store: *Store) Api {
         return .{
@@ -40,6 +42,10 @@ pub const Api = struct {
 
     pub fn setAuth(self: *Api, auth: *const Auth) void {
         self.auth = auth;
+    }
+
+    pub fn setWsState(self: *Api, ws: *WsState) void {
+        self.ws_state = ws;
     }
 
     pub fn handleRequest(self: *Api, r: zap.Request) !void {
@@ -329,8 +335,8 @@ pub const Api = struct {
         var seen = std.StringHashMap(void).init(self.allocator);
         defer seen.deinit();
 
-        // Build DB lookup for node metadata (name, host, port, status)
-        var db_lookup = std.StringHashMap(struct { name: []const u8, host: []const u8, status: []const u8 }).init(self.allocator);
+        // Build DB lookup for node metadata
+        var db_lookup = std.StringHashMap(NodeMeta).init(self.allocator);
         defer db_lookup.deinit();
 
         const db_nodes = if (self.db) |db| db.listNodes(self.allocator) catch &.{} else &.{};
@@ -339,23 +345,27 @@ pub const Api = struct {
             if (db_nodes.len > 0) self.allocator.free(db_nodes);
         }
         for (db_nodes) |node| {
-            db_lookup.put(node.id, .{ .name = node.name, .host = node.host, .status = node.status }) catch {};
+            db_lookup.put(node.id, .{
+                .name = node.name,
+                .host = node.host,
+                .status = node.status,
+                .os_id = node.os_id,
+                .os_version = node.os_version,
+                .os_name = node.os_name,
+                .arch = node.arch,
+                .kernel = node.kernel,
+                .cpu_model = node.cpu_model,
+                .cpu_cores = node.cpu_cores,
+                .total_ram = node.total_ram,
+                .pkg_manager = node.pkg_manager,
+            }) catch {};
         }
 
         // First: add all live agents from the in-memory store (enriched with DB metadata)
         for (store_agents) |agent| {
             if (count > 0) try buf.append(self.allocator, ',');
             const meta = db_lookup.get(agent.agent_id);
-            const entry = std.fmt.allocPrint(self.allocator,
-                \\{{"agent_id":"{s}","name":"{s}","host":"{s}","connected":{s},"last_seen":{d},"snapshot_count":{d}}}
-            , .{
-                agent.agent_id,
-                if (meta) |m| m.name else agent.agent_id,
-                if (meta) |m| m.host else "",
-                if (agent.connected) "true" else "false",
-                agent.last_seen,
-                agent.snapshot_count,
-            }) catch continue;
+            const entry = try self.formatNodeJson(agent.agent_id, meta, agent.connected, agent.last_seen, agent.snapshot_count);
             defer self.allocator.free(entry);
             try buf.appendSlice(self.allocator, entry);
             try seen.put(agent.agent_id, {});
@@ -366,12 +376,8 @@ pub const Api = struct {
         for (db_nodes) |node| {
             if (seen.contains(node.id)) continue;
             if (count > 0) try buf.append(self.allocator, ',');
-            const entry = std.fmt.allocPrint(self.allocator,
-                \\{{"agent_id":"{s}","name":"{s}","host":"{s}","connected":false,"last_seen":{d},"snapshot_count":0}}
-            , .{
-                node.id, node.name, node.host,
-                node.last_seen orelse node.created_at,
-            }) catch continue;
+            const meta = db_lookup.get(node.id);
+            const entry = try self.formatNodeJson(node.id, meta, false, node.last_seen orelse node.created_at, 0);
             defer self.allocator.free(entry);
             try buf.appendSlice(self.allocator, entry);
             count += 1;
@@ -379,6 +385,51 @@ pub const Api = struct {
 
         try buf.append(self.allocator, ']');
         try r.sendJson(buf.items);
+    }
+
+    const NodeMeta = struct {
+        name: []const u8,
+        host: []const u8,
+        status: []const u8,
+        os_id: ?[]const u8,
+        os_version: ?[]const u8,
+        os_name: ?[]const u8,
+        arch: ?[]const u8,
+        kernel: ?[]const u8,
+        cpu_model: ?[]const u8,
+        cpu_cores: ?i64,
+        total_ram: ?i64,
+        pkg_manager: ?[]const u8,
+    };
+
+    fn formatNodeJson(self: *Api, agent_id: []const u8, meta: ?NodeMeta, connected: bool, last_seen: i64, snapshot_count: usize) ![]u8 {
+        var json_buf: std.ArrayListUnmanaged(u8) = .{};
+        const w = json_buf.writer(self.allocator);
+        try w.writeAll("{");
+        try std.fmt.format(w, "\"agent_id\":\"{s}\"", .{agent_id});
+        try std.fmt.format(w, ",\"name\":\"{s}\"", .{if (meta) |m| m.name else agent_id});
+        try std.fmt.format(w, ",\"host\":\"{s}\"", .{if (meta) |m| m.host else ""});
+        try std.fmt.format(w, ",\"connected\":{s}", .{if (connected) "true" else "false"});
+        try std.fmt.format(w, ",\"last_seen\":{d}", .{last_seen});
+        try std.fmt.format(w, ",\"snapshot_count\":{d}", .{snapshot_count});
+
+        // Sysinfo fields
+        if (meta) |m| {
+            if (m.os_id) |v| try std.fmt.format(w, ",\"os_id\":\"{s}\"", .{v}) else try w.writeAll(",\"os_id\":null");
+            if (m.os_version) |v| try std.fmt.format(w, ",\"os_version\":\"{s}\"", .{v}) else try w.writeAll(",\"os_version\":null");
+            if (m.os_name) |v| try std.fmt.format(w, ",\"os_name\":\"{s}\"", .{v}) else try w.writeAll(",\"os_name\":null");
+            if (m.arch) |v| try std.fmt.format(w, ",\"arch\":\"{s}\"", .{v}) else try w.writeAll(",\"arch\":null");
+            if (m.kernel) |v| try std.fmt.format(w, ",\"kernel\":\"{s}\"", .{v}) else try w.writeAll(",\"kernel\":null");
+            if (m.cpu_model) |v| try std.fmt.format(w, ",\"cpu_model\":\"{s}\"", .{v}) else try w.writeAll(",\"cpu_model\":null");
+            if (m.cpu_cores) |v| try std.fmt.format(w, ",\"cpu_cores\":{d}", .{v}) else try w.writeAll(",\"cpu_cores\":null");
+            if (m.total_ram) |v| try std.fmt.format(w, ",\"total_ram\":{d}", .{v}) else try w.writeAll(",\"total_ram\":null");
+            if (m.pkg_manager) |v| try std.fmt.format(w, ",\"pkg_manager\":\"{s}\"", .{v}) else try w.writeAll(",\"pkg_manager\":null");
+        } else {
+            try w.writeAll(",\"os_id\":null,\"os_version\":null,\"os_name\":null,\"arch\":null,\"kernel\":null,\"cpu_model\":null,\"cpu_cores\":null,\"total_ram\":null,\"pkg_manager\":null");
+        }
+
+        try w.writeAll("}");
+        return try json_buf.toOwnedSlice(self.allocator);
     }
 
     fn getNode(self: *Api, r: zap.Request, node_id: []const u8) !void {
@@ -455,6 +506,11 @@ pub const Api = struct {
             return;
         };
 
+        // Register token in WsState so Spider can authenticate immediately
+        if (self.ws_state) |ws| {
+            ws.addToken(&node_id, &token) catch {};
+        }
+
         // Store sudo password if provided
         if (req.sudo_password) |pass| {
             if (crypto_engine.encrypt(self.allocator, pass)) |sudo_enc| {
@@ -483,6 +539,9 @@ pub const Api = struct {
         // Always delete from DB, regardless of SSH undeploy result
         if (self.db) |db| {
             db.deleteNode(node_id) catch {};
+        }
+        if (self.ws_state) |ws| {
+            ws.removeToken(node_id);
         }
         self.store.removeAgent(node_id);
         try r.sendJson("{\"status\":\"deleted\"}");
@@ -670,6 +729,32 @@ pub const Api = struct {
             } else {
                 try r.sendJson("{\"ok\":false,\"output\":\"command failed\"}");
             }
+            return;
+        } else if (std.mem.eql(u8, step, "pkg-job-start")) {
+            const pkg_mgr = r.getParamSlice("pkg") orelse {
+                r.setStatus(.bad_request);
+                try r.sendJson("{\"error\":\"missing pkg parameter\"}");
+                return;
+            };
+            const action = r.getParamSlice("action") orelse {
+                r.setStatus(.bad_request);
+                try r.sendJson("{\"error\":\"missing action parameter\"}");
+                return;
+            };
+            const job_id = deployer.startPkgJob(node_id, pkg_mgr, action) orelse {
+                r.setStatus(.internal_server_error);
+                try r.sendJson("{\"error\":\"failed to start job\"}");
+                return;
+            };
+            const start_resp = std.fmt.allocPrint(self.allocator,
+                \\{{"job_id":"{s}"}}
+            , .{job_id}) catch {
+                r.setStatus(.internal_server_error);
+                try r.sendJson("{\"error\":\"response serialization failed\"}");
+                return;
+            };
+            defer self.allocator.free(start_resp);
+            try r.sendJson(start_resp);
             return;
         } else if (std.mem.eql(u8, step, "pkg-refresh-start")) {
             const pkg_mgr = r.getParamSlice("pkg") orelse {

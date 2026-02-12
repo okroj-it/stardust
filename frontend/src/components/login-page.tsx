@@ -56,9 +56,9 @@ export function LoginPage({ onLogin }: LoginPageProps) {
             </div>
           </div>
           <h1 className="text-2xl font-bold tracking-tight bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text">
-            sroolify
+            Stardust
           </h1>
-          <p className="text-xs text-muted-foreground mt-1">Infrastructure Monitoring</p>
+          <p className="text-xs text-muted-foreground mt-1">The Capsule</p>
         </div>
 
         {/* Login card */}

@@ -17,6 +17,16 @@ pub const NodeRecord = struct {
     agent_token: []const u8,
     created_at: i64,
     last_seen: ?i64,
+    // System info (populated by agent sysinfo message)
+    os_id: ?[]const u8 = null,
+    os_version: ?[]const u8 = null,
+    os_name: ?[]const u8 = null,
+    arch: ?[]const u8 = null,
+    kernel: ?[]const u8 = null,
+    cpu_model: ?[]const u8 = null,
+    cpu_cores: ?i64 = null,
+    total_ram: ?i64 = null,
+    pkg_manager: ?[]const u8 = null,
 
     /// Free all heap-allocated string/blob fields.
     pub fn deinit(self: NodeRecord, allocator: std.mem.Allocator) void {
@@ -32,6 +42,13 @@ pub const NodeRecord = struct {
         if (self.sudo_pass_tag) |v| allocator.free(v);
         allocator.free(self.status);
         allocator.free(self.agent_token);
+        if (self.os_id) |v| allocator.free(v);
+        if (self.os_version) |v| allocator.free(v);
+        if (self.os_name) |v| allocator.free(v);
+        if (self.arch) |v| allocator.free(v);
+        if (self.kernel) |v| allocator.free(v);
+        if (self.cpu_model) |v| allocator.free(v);
+        if (self.pkg_manager) |v| allocator.free(v);
     }
 };
 
@@ -80,6 +97,17 @@ pub const Db = struct {
         conn.execNoArgs("ALTER TABLE nodes ADD COLUMN sudo_pass_enc BLOB") catch {};
         conn.execNoArgs("ALTER TABLE nodes ADD COLUMN sudo_pass_nonce BLOB") catch {};
         conn.execNoArgs("ALTER TABLE nodes ADD COLUMN sudo_pass_tag BLOB") catch {};
+
+        // Migration: add system info columns
+        conn.execNoArgs("ALTER TABLE nodes ADD COLUMN os_id TEXT") catch {};
+        conn.execNoArgs("ALTER TABLE nodes ADD COLUMN os_version TEXT") catch {};
+        conn.execNoArgs("ALTER TABLE nodes ADD COLUMN os_name TEXT") catch {};
+        conn.execNoArgs("ALTER TABLE nodes ADD COLUMN arch TEXT") catch {};
+        conn.execNoArgs("ALTER TABLE nodes ADD COLUMN kernel TEXT") catch {};
+        conn.execNoArgs("ALTER TABLE nodes ADD COLUMN cpu_model TEXT") catch {};
+        conn.execNoArgs("ALTER TABLE nodes ADD COLUMN cpu_cores INTEGER") catch {};
+        conn.execNoArgs("ALTER TABLE nodes ADD COLUMN total_ram INTEGER") catch {};
+        conn.execNoArgs("ALTER TABLE nodes ADD COLUMN pkg_manager TEXT") catch {};
 
         return .{ .conn = conn };
     }
@@ -151,7 +179,8 @@ pub const Db = struct {
         const r = try self.conn.row(
             \\SELECT id, name, host, port, ssh_user, ssh_key_enc, ssh_key_nonce, ssh_key_tag,
             \\       sudo_pass_enc, sudo_pass_nonce, sudo_pass_tag,
-            \\       status, agent_token, created_at, last_seen
+            \\       status, agent_token, created_at, last_seen,
+            \\       os_id, os_version, os_name, arch, kernel, cpu_model, cpu_cores, total_ram, pkg_manager
             \\FROM nodes WHERE id = ?1
         , .{id});
         if (r) |row| {
@@ -172,6 +201,15 @@ pub const Db = struct {
                 .agent_token = try allocator.dupe(u8, row.text(12)),
                 .created_at = row.int(13),
                 .last_seen = row.nullableInt(14),
+                .os_id = if (row.nullableText(15)) |v| try allocator.dupe(u8, v) else null,
+                .os_version = if (row.nullableText(16)) |v| try allocator.dupe(u8, v) else null,
+                .os_name = if (row.nullableText(17)) |v| try allocator.dupe(u8, v) else null,
+                .arch = if (row.nullableText(18)) |v| try allocator.dupe(u8, v) else null,
+                .kernel = if (row.nullableText(19)) |v| try allocator.dupe(u8, v) else null,
+                .cpu_model = if (row.nullableText(20)) |v| try allocator.dupe(u8, v) else null,
+                .cpu_cores = row.nullableInt(21),
+                .total_ram = row.nullableInt(22),
+                .pkg_manager = if (row.nullableText(23)) |v| try allocator.dupe(u8, v) else null,
             };
         }
         return null;
@@ -182,7 +220,8 @@ pub const Db = struct {
         var rows = try self.conn.rows(
             \\SELECT id, name, host, port, ssh_user, ssh_key_enc, ssh_key_nonce, ssh_key_tag,
             \\       sudo_pass_enc, sudo_pass_nonce, sudo_pass_tag,
-            \\       status, agent_token, created_at, last_seen
+            \\       status, agent_token, created_at, last_seen,
+            \\       os_id, os_version, os_name, arch, kernel, cpu_model, cpu_cores, total_ram, pkg_manager
             \\FROM nodes ORDER BY created_at DESC
         , .{});
         defer rows.deinit();
@@ -205,6 +244,15 @@ pub const Db = struct {
                 .agent_token = try allocator.dupe(u8, row.text(12)),
                 .created_at = row.int(13),
                 .last_seen = row.nullableInt(14),
+                .os_id = if (row.nullableText(15)) |v| try allocator.dupe(u8, v) else null,
+                .os_version = if (row.nullableText(16)) |v| try allocator.dupe(u8, v) else null,
+                .os_name = if (row.nullableText(17)) |v| try allocator.dupe(u8, v) else null,
+                .arch = if (row.nullableText(18)) |v| try allocator.dupe(u8, v) else null,
+                .kernel = if (row.nullableText(19)) |v| try allocator.dupe(u8, v) else null,
+                .cpu_model = if (row.nullableText(20)) |v| try allocator.dupe(u8, v) else null,
+                .cpu_cores = row.nullableInt(21),
+                .total_ram = row.nullableInt(22),
+                .pkg_manager = if (row.nullableText(23)) |v| try allocator.dupe(u8, v) else null,
             });
         }
         return try result.toOwnedSlice(allocator);
@@ -218,6 +266,28 @@ pub const Db = struct {
     /// Update last_seen timestamp.
     pub fn updateLastSeen(self: *Db, id: []const u8) !void {
         try self.conn.exec("UPDATE nodes SET last_seen = ?1 WHERE id = ?2", .{ std.time.timestamp(), id });
+    }
+
+    /// Update system info fields from agent sysinfo message.
+    pub fn updateSystemInfo(
+        self: *Db,
+        id: []const u8,
+        os_id: []const u8,
+        os_version: []const u8,
+        os_name: []const u8,
+        arch_val: []const u8,
+        kernel_val: []const u8,
+        cpu_model: []const u8,
+        cpu_cores: i64,
+        total_ram: i64,
+        pkg_manager: []const u8,
+    ) !void {
+        try self.conn.exec(
+            \\UPDATE nodes SET
+            \\  os_id = ?1, os_version = ?2, os_name = ?3, arch = ?4, kernel = ?5,
+            \\  cpu_model = ?6, cpu_cores = ?7, total_ram = ?8, pkg_manager = ?9
+            \\WHERE id = ?10
+        , .{ os_id, os_version, os_name, arch_val, kernel_val, cpu_model, cpu_cores, total_ram, pkg_manager, id });
     }
 
     /// Wipe encrypted credentials (SSH key + sudo password) for a node.

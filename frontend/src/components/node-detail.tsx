@@ -6,6 +6,7 @@ import { CpuCores } from "./cpu-cores"
 import { MiniChart } from "./mini-chart"
 import { TerminalModal } from "./terminal-modal"
 import type { NodeStatus } from "@/lib/api"
+import { deployStep } from "@/lib/api"
 import {
   X,
   Cpu,
@@ -20,7 +21,9 @@ import {
   Gauge,
   Activity,
   Trash2,
-  RefreshCw,
+  Package,
+  Server,
+  RotateCw,
 } from "lucide-react"
 
 interface NodeDetailProps {
@@ -33,6 +36,7 @@ export function NodeDetail({ node, onClose, onRemove }: NodeDetailProps) {
   const nodeId = node.agent_id
   const { stats, history } = useNodeStats(nodeId, 5000)
   const [showTerminal, setShowTerminal] = useState(false)
+  const [showReinstall, setShowReinstall] = useState(false)
 
   const cpuHistory = history.map((h) => h.cpu.usage_percent)
   const memHistory = history.map((h) => h.memory.used_percent)
@@ -73,9 +77,16 @@ export function NodeDetail({ node, onClose, onRemove }: NodeDetailProps) {
           <button
             onClick={() => setShowTerminal(true)}
             className="p-2 rounded-lg hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors"
-            title="Refresh packages"
+            title="Package upgrades"
           >
-            <RefreshCw className="w-4 h-4" />
+            <Package className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => setShowReinstall(true)}
+            className="p-2 rounded-lg hover:bg-amber-500/10 text-muted-foreground hover:text-amber-400 transition-colors"
+            title="Reinstall Spider"
+          >
+            <RotateCw className="w-4 h-4" />
           </button>
           <button
             onClick={onRemove}
@@ -92,6 +103,24 @@ export function NodeDetail({ node, onClose, onRemove }: NodeDetailProps) {
           </button>
         </div>
       </div>
+
+      {/* System Info */}
+      {(node.os_name || node.cpu_model || node.arch) && (
+        <div className="p-4 rounded-xl border border-border/50 bg-card/30 backdrop-blur-sm">
+          <div className="flex items-center gap-2 mb-3 text-muted-foreground">
+            <Server className="w-4 h-4" />
+            <span className="text-sm font-semibold text-foreground">System Info</span>
+          </div>
+          <div className="grid grid-cols-2 gap-x-8 gap-y-0.5">
+            {node.os_name && <InfoRow label="OS" value={node.os_name} />}
+            {node.arch && <InfoRow label="Architecture" value={node.arch} />}
+            {node.kernel && <InfoRow label="Kernel" value={node.kernel} />}
+            {node.cpu_model && <InfoRow label="CPU" value={`${node.cpu_model}${node.cpu_cores ? ` (${node.cpu_cores} cores)` : ''}`} />}
+            {node.total_ram != null && <InfoRow label="Total RAM" value={formatBytes(node.total_ram)} />}
+            {node.pkg_manager && <InfoRow label="Package Manager" value={node.pkg_manager} />}
+          </div>
+        </div>
+      )}
 
       {/* Overview Rings */}
       <div className="grid grid-cols-3 gap-6 p-6 rounded-xl border border-border/50 bg-card/30 backdrop-blur-sm">
@@ -243,7 +272,15 @@ export function NodeDetail({ node, onClose, onRemove }: NodeDetailProps) {
       {showTerminal && (
         <TerminalModal
           nodeId={nodeId}
+          nodePkgManager={node.pkg_manager}
           onClose={() => setShowTerminal(false)}
+        />
+      )}
+
+      {showReinstall && (
+        <ReinstallDialog
+          nodeId={nodeId}
+          onClose={() => setShowReinstall(false)}
         />
       )}
     </div>
@@ -393,6 +430,93 @@ function InfoRow({
         {label}
       </span>
       <span className="text-xs font-mono text-foreground">{value}</span>
+    </div>
+  )
+}
+
+type ReinstallStep = 'confirm' | 'stopping' | 'uploading' | 'installing' | 'starting' | 'done' | 'error'
+
+function ReinstallDialog({ nodeId, onClose }: { nodeId: string; onClose: () => void }) {
+  const [step, setStep] = useState<ReinstallStep>('confirm')
+  const [error, setError] = useState<string | null>(null)
+
+  const runReinstall = async () => {
+    const steps: { step: Parameters<typeof deployStep>[1]; label: ReinstallStep }[] = [
+      { step: 'stop', label: 'stopping' },
+      { step: 'upload', label: 'uploading' },
+      { step: 'install', label: 'installing' },
+      { step: 'start', label: 'starting' },
+    ]
+
+    for (const s of steps) {
+      setStep(s.label)
+      try {
+        const res = await deployStep(nodeId, s.step)
+        if (!res.ok) {
+          setError(res.message)
+          setStep('error')
+          return
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed')
+        setStep('error')
+        return
+      }
+    }
+    setStep('done')
+  }
+
+  const isRunning = step !== 'confirm' && step !== 'done' && step !== 'error'
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={!isRunning ? onClose : undefined} />
+      <div className="relative w-full max-w-md mx-4 rounded-2xl border border-border/50 bg-card shadow-2xl animate-in fade-in zoom-in-95 duration-200 p-6">
+        <h3 className="text-lg font-semibold mb-2">Reinstall Spider</h3>
+
+        {step === 'confirm' && (
+          <>
+            <p className="text-sm text-muted-foreground mb-4">
+              This will stop the Spider, upload the latest binary, reinstall the service, and restart it.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button onClick={onClose} className="px-3 py-1.5 rounded-lg text-sm text-muted-foreground hover:bg-muted transition-colors">Cancel</button>
+              <button onClick={runReinstall} className="px-3 py-1.5 rounded-lg text-sm bg-amber-600 text-white hover:bg-amber-700 transition-colors font-medium">Reinstall</button>
+            </div>
+          </>
+        )}
+
+        {isRunning && (
+          <div className="flex items-center gap-3 py-2">
+            <div className="w-5 h-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+            <span className="text-sm text-muted-foreground">
+              {step === 'stopping' && 'Standing down Spider...'}
+              {step === 'uploading' && 'Major Tom stepping through the door...'}
+              {step === 'installing' && 'Wiring up the circuits...'}
+              {step === 'starting' && 'Launching Spider...'}
+            </span>
+          </div>
+        )}
+
+        {step === 'done' && (
+          <>
+            <p className="text-sm text-emerald-400 mb-4">Major Tom has landed — Spider reinstalled.</p>
+            <div className="flex justify-end">
+              <button onClick={onClose} className="px-3 py-1.5 rounded-lg text-sm bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium">Done</button>
+            </div>
+          </>
+        )}
+
+        {step === 'error' && (
+          <>
+            <p className="text-sm text-red-400 mb-4">{error || 'Reinstall failed'}</p>
+            <div className="flex justify-end gap-2">
+              <button onClick={onClose} className="px-3 py-1.5 rounded-lg text-sm text-muted-foreground hover:bg-muted transition-colors">Close</button>
+              <button onClick={runReinstall} className="px-3 py-1.5 rounded-lg text-sm bg-amber-600 text-white hover:bg-amber-700 transition-colors font-medium">Retry</button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   )
 }

@@ -88,6 +88,16 @@ export interface NodeStatus {
   connected: boolean
   last_seen: number
   snapshot_count: number
+  // System info (from agent sysinfo)
+  os_id?: string | null
+  os_version?: string | null
+  os_name?: string | null
+  arch?: string | null
+  kernel?: string | null
+  cpu_model?: string | null
+  cpu_cores?: number | null
+  total_ram?: number | null
+  pkg_manager?: string | null
 }
 
 const BASE = ''
@@ -279,4 +289,69 @@ export async function pkgRefreshPoll(nodeId: string, jobId: string, offset: numb
     throw new Error(err.error || `HTTP ${res.status}`)
   }
   return res.json()
+}
+
+export type PkgAction = 'check-updates' | 'upgrade' | 'full-upgrade'
+
+export async function pkgJobStart(nodeId: string, pkgManager: string, action: PkgAction): Promise<string> {
+  const res = await apiFetch(`${BASE}/api/nodes/${nodeId}/deploy?step=pkg-job-start&pkg=${pkgManager}&action=${action}`, {
+    method: 'POST',
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+  const data = await res.json()
+  return data.job_id
+}
+
+// Reuse the same poll endpoint for all jobs
+export async function pkgJobPoll(nodeId: string, jobId: string, offset: number): Promise<PkgPollResult> {
+  return pkgRefreshPoll(nodeId, jobId, offset)
+}
+
+export interface UpgradablePackage {
+  name: string
+  oldVersion: string
+  newVersion: string
+}
+
+export function parseUpgradablePackages(output: string, pkgManager: string): UpgradablePackage[] {
+  const packages: UpgradablePackage[] = []
+
+  if (pkgManager === 'apt') {
+    // apt-get upgrade -s output: "Inst pkg [old] (new repo) ..."
+    for (const line of output.split('\n')) {
+      const match = line.match(/^Inst\s+(\S+)\s+\[([^\]]+)\]\s+\((\S+)/)
+      if (match) {
+        packages.push({ name: match[1], oldVersion: match[2], newVersion: match[3] })
+      }
+    }
+  } else if (pkgManager === 'dnf' || pkgManager === 'yum') {
+    // dnf/yum check-update output: "name.arch  version  repo"
+    for (const line of output.split('\n')) {
+      const match = line.match(/^(\S+?)\.(\S+)\s+(\S+)\s+(\S+)/)
+      if (match && !line.startsWith('Last metadata') && !line.startsWith('Obsoleting')) {
+        packages.push({ name: match[1], oldVersion: '', newVersion: match[3] })
+      }
+    }
+  } else if (pkgManager === 'pacman') {
+    // pacman -Qu output: "name old -> new"
+    for (const line of output.split('\n')) {
+      const match = line.match(/^(\S+)\s+(\S+)\s+->\s+(\S+)/)
+      if (match) {
+        packages.push({ name: match[1], oldVersion: match[2], newVersion: match[3] })
+      }
+    }
+  } else if (pkgManager === 'apk') {
+    // apk upgrade -s: "(1/N) Upgrading pkg (old -> new)" or "Upgrading pkg (old -> new)"
+    for (const line of output.split('\n')) {
+      const match = line.match(/(?:Upgrading|Installing)\s+(\S+)\s+\((\S+)\s+->\s+(\S+)\)/)
+      if (match) {
+        packages.push({ name: match[1], oldVersion: match[2], newVersion: match[3] })
+      }
+    }
+  }
+
+  return packages
 }

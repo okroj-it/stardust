@@ -1,4 +1,4 @@
-const TOKEN_KEY = 'sroolify_token'
+const TOKEN_KEY = 'stardust_token'
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY)

@@ -333,11 +333,11 @@ export function AddNodeModal({ onClose, onSuccess }: AddNodeModalProps) {
               <div className="mt-4 p-4 rounded-xl bg-muted/30 border border-border/30">
                 <p className="text-xs text-muted-foreground mb-2">Manual install on the target node:</p>
                 <div className="p-3 rounded-lg bg-background/50 font-mono text-[11px] text-muted-foreground leading-relaxed">
-                  <span className="text-emerald-400">$</span> # Copy sroolify-agent-{checkInfo.arch} to the node<br />
-                  <span className="text-emerald-400">$</span> sudo cp sroolify-agent /usr/local/bin/<br />
-                  <span className="text-emerald-400">$</span> sudo chmod +x /usr/local/bin/sroolify-agent<br />
-                  <span className="text-emerald-400">$</span> sroolify-agent \<br />
-                  &nbsp;&nbsp;--server wss://sroolify.meshnet.lol/ws \<br />
+                  <span className="text-emerald-400">$</span> # Copy stardust-spider to the node<br />
+                  <span className="text-emerald-400">$</span> sudo cp stardust-spider /usr/local/bin/<br />
+                  <span className="text-emerald-400">$</span> sudo chmod +x /usr/local/bin/stardust-spider<br />
+                  <span className="text-emerald-400">$</span> stardust-spider \<br />
+                  &nbsp;&nbsp;--server wss://stardust.meshnet.lol/ws \<br />
                   &nbsp;&nbsp;--token {nodeResult.token.slice(0, 8)}... \<br />
                   &nbsp;&nbsp;--agent-id {nodeResult.id.slice(0, 8)}...
                 </div>

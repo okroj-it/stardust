@@ -2,6 +2,7 @@ const std = @import("std");
 const zap = @import("zap");
 const common = @import("common");
 const Store = @import("store.zig").Store;
+const Db = @import("db.zig").Db;
 
 /// Per-connection WebSocket context.
 const ConnContext = struct {
@@ -13,6 +14,7 @@ const ConnContext = struct {
 pub const WsState = struct {
     allocator: std.mem.Allocator,
     store: *Store,
+    db: ?*Db = null,
     /// Valid tokens: agent_id → token
     valid_tokens: std.StringHashMap([]const u8),
     mu: std.Thread.Mutex = .{},
@@ -64,7 +66,7 @@ pub fn getSettings(state: *WsState) WsHandler.WebSocketSettings {
 fn onOpen(state: ?*WsState, handle: WsHandle) !void {
     _ = state;
     _ = handle;
-    std.log.info("ws: new connection", .{});
+    std.log.info("[GROUND CONTROL] New signal incoming", .{});
 }
 
 fn onMessage(state: ?*WsState, handle: WsHandle, message: []const u8, is_text: bool) !void {
@@ -76,6 +78,10 @@ fn onMessage(state: ?*WsState, handle: WsHandle, message: []const u8, is_text: b
     if (std.mem.indexOf(u8, message, "\"type\":\"auth\"")) |_| {
         handleAuth(ws_state, handle, message) catch |err| {
             std.log.warn("ws: auth handling failed: {}", .{err});
+        };
+    } else if (std.mem.indexOf(u8, message, "\"type\":\"sysinfo\"")) |_| {
+        handleSysinfo(ws_state, message) catch |err| {
+            std.log.warn("ws: sysinfo handling failed: {}", .{err});
         };
     } else {
         // Treat as stats payload — the agent sends raw SystemStats JSON
@@ -102,7 +108,7 @@ fn handleAuth(state: *WsState, handle: WsHandle, message: []const u8) !void {
     const token = parsed.value.token;
 
     if (state.validateToken(agent_id, token)) {
-        std.log.info("ws: agent '{s}' authenticated", .{agent_id});
+        std.log.info("[GROUND CONTROL] Signal received from Spider '{s}'", .{agent_id});
 
         const now = std.time.milliTimestamp();
         var buf: [256]u8 = undefined;
@@ -111,7 +117,7 @@ fn handleAuth(state: *WsState, handle: WsHandle, message: []const u8) !void {
         , .{now}) catch return;
         WsHandler.write(handle, resp, true) catch {};
     } else {
-        std.log.warn("ws: auth failed for agent '{s}'", .{agent_id});
+        std.log.warn("[GROUND CONTROL] Unknown signal from '{s}' — credentials invalid", .{agent_id});
         const fail = "{\"type\":\"auth_fail\",\"reason\":\"invalid credentials\"}";
         WsHandler.write(handle, fail, true) catch {};
     }
@@ -135,7 +141,7 @@ fn handleStats(state: *WsState, _: WsHandle, message: []const u8) !void {
 fn onClose(state: ?*WsState, uuid: isize) !void {
     _ = state;
     _ = uuid;
-    std.log.info("ws: connection closed", .{});
+    std.log.info("[GROUND CONTROL] Signal lost", .{});
 }
 
 const AuthMsg = struct {
@@ -148,3 +154,56 @@ const AuthMsg = struct {
 const StatsIdExtract = struct {
     agent_id: []const u8,
 };
+
+const SysinfoMsg = struct {
+    agent_id: []const u8,
+    os_id: []const u8 = "",
+    os_version: []const u8 = "",
+    os_name: []const u8 = "",
+    arch: []const u8 = "",
+    kernel: []const u8 = "",
+    cpu_model: []const u8 = "",
+    cpu_cores: i64 = 0,
+    total_ram: i64 = 0,
+    pkg_manager: []const u8 = "",
+};
+
+fn handleSysinfo(state: *WsState, message: []const u8) !void {
+    const db = state.db orelse return;
+
+    const parsed = std.json.parseFromSlice(SysinfoMsg, state.allocator, message, .{
+        .ignore_unknown_fields = true,
+        .allocate = .alloc_always,
+    }) catch {
+        std.log.warn("ws: could not parse sysinfo message", .{});
+        return;
+    };
+    defer parsed.deinit();
+
+    const v = parsed.value;
+    std.log.info("[GROUND CONTROL] Sysinfo from Spider '{s}': {s} {s} ({s}), cpu={s} x{d}, ram={d}MB, pkg={s}", .{
+        v.agent_id,
+        v.os_id,
+        v.os_version,
+        v.arch,
+        v.cpu_model,
+        v.cpu_cores,
+        @divTrunc(v.total_ram, 1024 * 1024),
+        v.pkg_manager,
+    });
+
+    db.updateSystemInfo(
+        v.agent_id,
+        v.os_id,
+        v.os_version,
+        v.os_name,
+        v.arch,
+        v.kernel,
+        v.cpu_model,
+        v.cpu_cores,
+        v.total_ram,
+        v.pkg_manager,
+    ) catch |err| {
+        std.log.warn("ws: failed to store sysinfo for '{s}': {}", .{ v.agent_id, err });
+    };
+}

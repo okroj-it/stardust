@@ -1,5 +1,6 @@
 const std = @import("std");
 const collector = @import("collector.zig");
+const SysInfo = @import("sysinfo.zig").SysInfo;
 const WsClient = @import("ws_client.zig").WsClient;
 
 const version = "0.1.0";
@@ -19,13 +20,13 @@ pub fn main() !void {
 
     const args = parseArgs() orelse return;
 
-    std.log.info("sroolify-agent v{s} starting", .{version});
+    std.log.info("[SPIDER] Hello Spaceboy — Stardust Spider v{s}", .{version});
 
     if (args.stdout_mode) {
         try runStdoutMode(allocator, args);
     } else {
         if (args.server_url == null or args.token == null or args.agent_id == null) {
-            std.log.err("--server, --token, and --agent-id are required (or use --stdout)", .{});
+            std.log.err("[SPIDER] --server, --token, and --agent-id are required (or use --stdout)", .{});
             return;
         }
         try runAgentMode(allocator, args);
@@ -61,7 +62,7 @@ fn runAgentMode(allocator: std.mem.Allocator, args: Args) !void {
 
     // Parse ws://host:port/path
     const parsed = parseWsUrl(url) orelse {
-        std.log.err("invalid server URL: {s}", .{url});
+        std.log.err("[SPIDER] Invalid server URL: {s}", .{url});
         return;
     };
 
@@ -78,17 +79,17 @@ fn runAgentMode(allocator: std.mem.Allocator, args: Args) !void {
     var backoff: u64 = 1;
 
     while (true) {
-        std.log.info("connecting to {s}:{d}{s} (tls={s})", .{ parsed.host, parsed.port, parsed.path, if (parsed.tls) "yes" else "no" });
+        std.log.info("[SPIDER] Reaching for Ground Control at {s}:{d}{s} (tls={s})", .{ parsed.host, parsed.port, parsed.path, if (parsed.tls) "yes" else "no" });
 
         var ws: WsClient = .{};
         ws.connect(allocator, parsed.host, parsed.port, parsed.path, parsed.tls) catch |err| {
-            std.log.warn("connection failed: {}, retrying in {d}s", .{ err, backoff });
+            std.log.warn("[SPIDER] Signal lost: {}, retrying in {d}s", .{ err, backoff });
             std.Thread.sleep(backoff * std.time.ns_per_s);
             backoff = @min(backoff * 2, 60);
             continue;
         };
 
-        std.log.info("connected, authenticating", .{});
+        std.log.info("[SPIDER] Signal established to Ground Control", .{});
         backoff = 1;
 
         // Send auth message
@@ -102,19 +103,40 @@ fn runAgentMode(allocator: std.mem.Allocator, args: Args) !void {
             continue;
         };
 
-        std.log.info("authenticated, streaming stats", .{});
+        std.log.info("[SPIDER] Authenticated, transmitting system info", .{});
+
+        // Send system info once
+        const sysinfo = SysInfo.collect();
+        var sysinfo_buf: [2048]u8 = undefined;
+        if (sysinfo.serialize(&sysinfo_buf, agent_id)) |sysinfo_json| {
+            ws.sendText(sysinfo_json) catch {
+                ws.close();
+                continue;
+            };
+            std.log.info("[SPIDER] Sysinfo: {s} {s} ({s}), cpu={s} x{d}, ram={d}MB, pkg={s}", .{
+                sysinfo.osId(),
+                sysinfo.osVersion(),
+                sysinfo.arch(),
+                sysinfo.cpuModel(),
+                sysinfo.cpu_cores,
+                sysinfo.total_ram / (1024 * 1024),
+                sysinfo.pkgManager(),
+            });
+        }
+
+        std.log.info("[SPIDER] Streaming telemetry", .{});
 
         // Main collect+send loop
         while (ws.connected) {
             const stats = coll.collect(allocator) catch |err| {
-                std.log.warn("collect failed: {}", .{err});
+                std.log.warn("[SPIDER] Collect failed: {}", .{err});
                 std.Thread.sleep(@as(u64, args.interval_ms) * std.time.ns_per_ms);
                 continue;
             };
             defer allocator.free(stats);
 
             ws.sendText(stats) catch {
-                std.log.warn("send failed, reconnecting", .{});
+                std.log.warn("[SPIDER] Send failed, reconnecting", .{});
                 break;
             };
 
@@ -122,7 +144,7 @@ fn runAgentMode(allocator: std.mem.Allocator, args: Args) !void {
         }
 
         ws.close();
-        std.log.info("disconnected, reconnecting in {d}s", .{backoff});
+        std.log.info("[SPIDER] Signal lost, reconnecting in {d}s", .{backoff});
         std.Thread.sleep(backoff * std.time.ns_per_s);
         backoff = @min(backoff * 2, 60);
     }
@@ -191,13 +213,15 @@ fn parseArgs() ?Args {
 
 fn printUsage() void {
     std.fs.File.stderr().writeAll(
-        \\Usage: sroolify-agent [OPTIONS]
+        \\Usage: stardust-spider [OPTIONS]
+        \\
+        \\  Stardust Spider — The Spider from Mars.
         \\
         \\Options:
         \\  --stdout          Print stats to stdout as JSON (no server connection)
-        \\  --server URL      WebSocket server URL (e.g. ws://host:8080/ws)
+        \\  --server URL      Ground Control WebSocket URL (e.g. wss://host/ws)
         \\  --token TOKEN     Authentication token
-        \\  --agent-id ID     Unique agent identifier
+        \\  --agent-id ID     Unique Spider identifier
         \\  --interval MS     Collection interval in milliseconds (default: 5000)
         \\  -h, --help        Show this help
         \\

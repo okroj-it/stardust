@@ -151,7 +151,7 @@ export function RemoveNodeModal({ node, onClose, onDeleted }: RemoveNodeModalPro
                 Remove <span className="font-semibold">{node.name || node.host || node.agent_id.slice(0, 12)}</span> from monitoring?
               </p>
               <p className="text-xs text-muted-foreground mt-1.5">
-                This will stop the agent, remove the binary, wipe stored SSH keys and sudo password, and delete the node from the database.
+                This will stop the Spider, remove the binary, wipe stored SSH keys and sudo password, and delete the node from the database.
               </p>
             </div>
 
