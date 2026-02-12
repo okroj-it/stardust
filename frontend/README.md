@@ -1,73 +1,56 @@
-# React + TypeScript + Vite
+# The Capsule — Stardust Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React dashboard for the Stardust server monitoring platform.
 
-Currently, two official plugins are available:
+## Stack
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- **React 19** + **TypeScript 5.9**
+- **Tailwind CSS 4** — dark theme
+- **xterm.js 6** — browser-based SSH terminal
+- **Lucide** — icons
+- **Motion** — animations
+- **Vite 7** — build tooling
 
-## React Compiler
+## Development
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Opens at `http://localhost:5173` with HMR. API requests proxy to the Zig server (configure in `vite.config.ts`).
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Production Build
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm run build
 ```
+
+Output goes to `../ui/` — the Zig server embeds these assets into the binary at compile time.
+
+## Components
+
+| Component | File | Description |
+|:----------|:-----|:------------|
+| Dashboard | `App.tsx` | Main layout, node grid, header toolbar |
+| Node Card | `node-card.tsx` | Fleet overview card with live stats |
+| Node Detail | `node-detail.tsx` | Per-node metrics, charts, system info |
+| Add Node | `add-node-modal.tsx` | Onboarding wizard (SSH credentials) |
+| Remove Node | `remove-node-modal.tsx` | Clean teardown with confirmation |
+| Package Manager | `terminal-modal.tsx` | Package updates, upgrades, cache refresh |
+| Web Terminal | `web-terminal.tsx` | Interactive SSH shell (Space Oddity) |
+| Fleet Command | `fleet-command-modal.tsx` | Parallel command execution (Starman) |
+| Service Manager | `service-manager.tsx` | Systemd service viewer/controller (Life on Mars) |
+| Ansible | `ansible-modal.tsx` | Playbook editor and runner (Ziggy) |
+| Login | `login-page.tsx` | JWT authentication |
+| Profile | `profile-modal.tsx` | Password change, logout |
+
+## API Client
+
+All server communication goes through `lib/api.ts` — typed fetch wrappers with JWT auth, automatic 401 handling, and token refresh.
+
+## Key Patterns
+
+- **Polling**: Long-running operations (fleet commands, Ansible, package jobs) use offset-based polling at 300ms intervals
+- **Capabilities**: Features are conditionally rendered based on server capabilities (`/api/capabilities`)
+- **Embedded build**: The frontend is compiled into the server binary — no separate web server in production
