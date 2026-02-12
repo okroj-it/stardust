@@ -7,7 +7,7 @@
 <p align="center">
   <em>A lightweight server monitoring & orchestration platform built in Zig.<br/>
   Deploy zero-dependency agents to your Linux fleet, collect real-time telemetry over WebSockets,<br/>
-  open interactive SSH terminals, manage packages, and run Ansible playbooks — all from a single binary and a clean React dashboard.</em>
+  open interactive SSH terminals, run fleet-wide commands, manage packages, and execute Ansible playbooks — all from a single binary and a clean React dashboard.</em>
 </p>
 
 <p align="center">
@@ -37,6 +37,7 @@ Every component draws from David Bowie's *Space Oddity* and *Ziggy Stardust* myt
 | Web UI | **The Capsule** | React dashboard for fleet overview and management | *"Sitting in a tin can, far above the world"* |
 | Deployer | **Major Tom** | SSH-based agent deployment & lifecycle manager | *"Commencing countdown, engines on"* |
 | Web Terminal | **Space Oddity** | Browser-based SSH terminal via PTY relay | *"Here am I floating round my tin can"* |
+| Fleet Command | **Starman** | Parallel ad-hoc command execution across nodes | *"There's a starman waiting in the sky"* |
 | Ansible | **Ziggy** | Optional Ansible orchestration engine | *"Ziggy played guitar"* |
 
 ---
@@ -55,6 +56,7 @@ Every component draws from David Bowie's *Space Oddity* and *Ziggy Stardust* myt
                     │    Zig + zap     │                             │  (per node)  │
                     │                  │──── SSH (Major Tom) ────►  │  zero-dep    │
                     │                  │──── SSH PTY (Oddity) ───►  │              │
+                    │                  │──── SSH (Starman) ────►  │              │
                     └────────┬─────────┘                             └─────────────┘
                              │
                     ┌────────▼─────────┐       ┌─────────────────┐
@@ -67,6 +69,8 @@ Every component draws from David Bowie's *Space Oddity* and *Ziggy Stardust* myt
 Ground Control is a **single Zig binary** that serves the embedded React frontend, exposes a REST API, and maintains persistent WebSocket connections to every Spider. Major Tom handles the full agent lifecycle — uploading binaries over SSH, installing systemd services, and managing credentials with AES-GCM-256 encryption.
 
 Spiders are **statically-linked, zero-dependency** Zig binaries that run on any Linux box. They collect system telemetry and stream it back to Ground Control in real time.
+
+**Starman** lets you run ad-hoc shell commands across your entire fleet in parallel — type `uptime`, select your nodes, and watch output stream in from every machine at once.
 
 When Ansible is detected on the host, **Ziggy** lights up — generating dynamic inventories from your node database and letting you run playbooks across your fleet with streaming output, all from The Capsule.
 
@@ -115,6 +119,16 @@ Spiders auto-detect and report: **OS** (name, version, ID), **kernel**, **archit
 - **TUI-compatible** — `mc`, `htop`, `vim`, and other curses applications work out of the box (`TERM=xterm-256color`)
 - **Auto-sizing** — Terminal dimensions sync on connect and window resize
 - **Secure sessions** — JWT-authenticated, temporary key files (mode `0600`) cleaned up on disconnect, key material zeroed in memory
+
+### Fleet Command (Starman)
+
+- **Parallel execution** — Run any shell command across multiple nodes simultaneously with per-node streaming output
+- **Node targeting** — Select individual nodes or the entire connected fleet from a checkbox grid
+- **Sudo support** — Toggle sudo mode; per-node sudo passwords are decrypted from the database automatically
+- **Live streaming** — Output streams in real time via single-request polling (one poll returns all nodes)
+- **Per-node panels** — Collapsible output sections with status indicators (running/success/error) per node
+- **Command history** — Last 10 commands saved in browser localStorage with dropdown recall
+- **Secure execution** — SSH keys decrypted to temporary files (mode `0600`), cleaned up after execution; passwords zeroed in memory
 
 ### Ansible Integration (Ziggy)
 
@@ -379,11 +393,18 @@ All endpoints (except health and login) require `Authorization: Bearer <token>`.
 
 Package actions: `check-updates`, `upgrade`, `full-upgrade`
 
+### Fleet Command (Starman)
+
+| Method | Endpoint | Description |
+|:-------|:---------|:------------|
+| `POST` | `/api/fleet/run` | Start command `{command, node_ids, sudo?}`, returns `{job_id}` |
+| `POST` | `/api/fleet/poll?job=ID` | Poll output `{offsets: [{node_id, offset}, ...]}`, returns per-node results |
+
 ### Ansible
 
 | Method | Endpoint | Description |
 |:-------|:---------|:------------|
-| `GET` | `/api/capabilities` | Server feature flags (ansible, deployer, auth) |
+| `GET` | `/api/capabilities` | Server feature flags (ansible, deployer, auth, fleet) |
 | `GET` | `/api/ansible/status` | Ansible version and availability |
 | `POST` | `/api/ansible/run` | Run playbook `{playbook, nodes?, requirements?}` |
 | `POST` | `/api/ansible/poll?job=ID&offset=N` | Poll playbook output |
@@ -447,6 +468,7 @@ stardust/
 │   │   ├── ws_handler.zig    # WebSocket handler
 │   │   ├── deployer.zig      # Major Tom (SSH deployment)
 │   │   ├── terminal_handler.zig # Space Oddity (web terminal)
+│   │   ├── fleet.zig          # Starman (fleet command execution)
 │   │   └── ansible.zig       # Ziggy (Ansible integration)
 │   ├── agent/
 │   │   ├── main.zig          # Spider entry point
@@ -470,6 +492,7 @@ stardust/
 │       │   ├── remove-node-modal.tsx
 │       │   ├── terminal-modal.tsx  # Package management
 │       │   ├── web-terminal.tsx   # SSH terminal (Space Oddity)
+│       │   ├── fleet-command-modal.tsx # Fleet command runner (Starman)
 │       │   ├── ansible-modal.tsx   # Playbook runner
 │       │   ├── login-page.tsx
 │       │   └── profile-modal.tsx

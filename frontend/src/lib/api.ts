@@ -323,11 +323,12 @@ export interface Capabilities {
   auth: boolean
   ansible: boolean
   ansible_version?: string | null
+  fleet: boolean
 }
 
 export async function fetchCapabilities(): Promise<Capabilities> {
   const res = await apiFetch(`${BASE}/api/capabilities`)
-  if (!res.ok) return { deployer: false, auth: false, ansible: false }
+  if (!res.ok) return { deployer: false, auth: false, ansible: false, fleet: false }
   return res.json()
 }
 
@@ -400,4 +401,47 @@ export function parseUpgradablePackages(output: string, pkgManager: string): Upg
   }
 
   return packages
+}
+
+// --- Fleet Command Execution ---
+
+export interface FleetNodeResult {
+  name: string
+  output: string
+  offset: number
+  done: boolean
+  ok: boolean
+}
+
+export interface FleetPollResult {
+  nodes: Record<string, FleetNodeResult>
+  all_done: boolean
+}
+
+export async function fleetRun(command: string, nodeIds: string[], sudo: boolean = false): Promise<string> {
+  const res = await apiFetch(`${BASE}/api/fleet/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ command, node_ids: nodeIds, sudo }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+  const data = await res.json()
+  return data.job_id
+}
+
+export async function fleetPoll(jobId: string, offsets: Record<string, number>): Promise<FleetPollResult> {
+  const offsetArray = Object.entries(offsets).map(([node_id, offset]) => ({ node_id, offset }))
+  const res = await apiFetch(`${BASE}/api/fleet/poll?job=${jobId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ offsets: offsetArray }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+  return res.json()
 }

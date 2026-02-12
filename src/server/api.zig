@@ -8,6 +8,7 @@ const Deployer = deployer_mod.Deployer;
 const Auth = @import("auth.zig").Auth;
 const WsState = @import("ws_handler.zig").WsState;
 const AnsibleEngine = @import("ansible.zig").AnsibleEngine;
+const FleetEngine = @import("fleet.zig").FleetEngine;
 
 pub const Api = struct {
     allocator: std.mem.Allocator,
@@ -18,6 +19,7 @@ pub const Api = struct {
     auth: ?*const Auth = null,
     ws_state: ?*WsState = null,
     ansible: ?*AnsibleEngine = null,
+    fleet: ?*FleetEngine = null,
 
     pub fn init(allocator: std.mem.Allocator, store: *Store) Api {
         return .{
@@ -52,6 +54,10 @@ pub const Api = struct {
 
     pub fn setAnsible(self: *Api, a: *AnsibleEngine) void {
         self.ansible = a;
+    }
+
+    pub fn setFleet(self: *Api, f: *FleetEngine) void {
+        self.fleet = f;
     }
 
     pub fn handleRequest(self: *Api, r: zap.Request) !void {
@@ -116,6 +122,8 @@ pub const Api = struct {
             try self.handleNodeDetail(r, path);
         } else if (std.mem.startsWith(u8, path, "/api/ansible/")) {
             try self.handleAnsible(r, path);
+        } else if (std.mem.startsWith(u8, path, "/api/fleet/")) {
+            try self.handleFleet(r, path);
         } else {
             return; // Let static file handler deal with it
         }
@@ -931,12 +939,13 @@ pub const Api = struct {
         defer if (ansible_ver != null) self.allocator.free(ver_json);
 
         const resp = std.fmt.allocPrint(self.allocator,
-            \\{{"deployer":{s},"auth":{s},"ansible":{s},"ansible_version":{s}}}
+            \\{{"deployer":{s},"auth":{s},"ansible":{s},"ansible_version":{s},"fleet":{s}}}
         , .{
             if (self.deployer != null) "true" else "false",
             if (self.auth != null) "true" else "false",
             if (self.ansible != null) "true" else "false",
             ver_json,
+            if (self.fleet != null) "true" else "false",
         }) catch {
             r.setStatus(.internal_server_error);
             try r.sendJson("{\"error\":\"response serialization failed\"}");
@@ -1071,6 +1080,170 @@ pub const Api = struct {
             ansible.removeJob(job_id);
         }
     }
+
+    // --- Fleet Command Execution ---
+
+    fn handleFleet(self: *Api, r: zap.Request, path: []const u8) !void {
+        const fleet = self.fleet orelse {
+            r.setStatus(.service_unavailable);
+            try r.sendJson("{\"error\":\"fleet commands not available\"}");
+            return;
+        };
+
+        if (std.mem.eql(u8, path, "/api/fleet/run")) {
+            try self.handleFleetRun(r, fleet);
+        } else if (std.mem.eql(u8, path, "/api/fleet/poll")) {
+            try self.handleFleetPoll(r, fleet);
+        } else {
+            r.setStatus(.not_found);
+            try r.sendJson("{\"error\":\"not found\"}");
+        }
+    }
+
+    fn handleFleetRun(self: *Api, r: zap.Request, fleet: *FleetEngine) !void {
+        if (r.methodAsEnum() != .POST) {
+            r.setStatus(.method_not_allowed);
+            try r.sendJson("{\"error\":\"method not allowed\"}");
+            return;
+        }
+
+        const body = r.body orelse {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"missing request body\"}");
+            return;
+        };
+
+        const parsed = std.json.parseFromSlice(FleetRunRequest, self.allocator, body, .{
+            .ignore_unknown_fields = true,
+            .allocate = .alloc_always,
+        }) catch {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"invalid JSON\"}");
+            return;
+        };
+        defer parsed.deinit();
+        const req = parsed.value;
+
+        if (req.command.len == 0) {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"command is required\"}");
+            return;
+        }
+        if (req.node_ids.len == 0) {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"at least one node_id is required\"}");
+            return;
+        }
+
+        const job_id = fleet.runCommand(req.command, req.node_ids, req.sudo) orelse {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"failed to start fleet command\"}");
+            return;
+        };
+
+        const resp = std.fmt.allocPrint(self.allocator, "{{\"job_id\":\"{s}\"}}", .{job_id}) catch {
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(resp);
+        try r.sendJson(resp);
+    }
+
+    fn handleFleetPoll(self: *Api, r: zap.Request, fleet: *FleetEngine) !void {
+        if (r.methodAsEnum() != .POST) {
+            r.setStatus(.method_not_allowed);
+            try r.sendJson("{\"error\":\"method not allowed\"}");
+            return;
+        }
+
+        r.parseQuery();
+        const job_id = r.getParamSlice("job") orelse {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"missing job parameter\"}");
+            return;
+        };
+
+        // Parse offsets from body
+        const body = r.body orelse "{}";
+        const parsed = std.json.parseFromSlice(FleetPollRequest, self.allocator, body, .{
+            .ignore_unknown_fields = true,
+            .allocate = .alloc_always,
+        }) catch {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"invalid JSON\"}");
+            return;
+        };
+        defer parsed.deinit();
+
+        // Build offset arrays for pollJob
+        var offset_keys: [64][]const u8 = undefined;
+        var offset_vals: [64]usize = undefined;
+        var offset_count: usize = 0;
+        if (parsed.value.offsets) |offsets| {
+            for (offsets) |o| {
+                if (offset_count >= 64) break;
+                offset_keys[offset_count] = o.node_id;
+                offset_vals[offset_count] = o.offset;
+                offset_count += 1;
+            }
+        }
+
+        const result = fleet.pollJob(job_id, offset_keys[0..offset_count], offset_vals[0..offset_count]) orelse {
+            r.setStatus(.not_found);
+            try r.sendJson("{\"error\":\"job not found\"}");
+            return;
+        };
+
+        // Build JSON response: { "nodes": { "id": { ... }, ... }, "all_done": true/false }
+        var resp_buf = std.ArrayListUnmanaged(u8){};
+        defer resp_buf.deinit(self.allocator);
+        resp_buf.appendSlice(self.allocator, "{\"nodes\":{") catch {
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+
+        for (0..result.count) |i| {
+            const entry = result.entries[i];
+            if (i > 0) resp_buf.append(self.allocator, ',') catch {};
+
+            const escaped_output = jsonEscape(self.allocator, entry.new_output) catch continue;
+            defer self.allocator.free(escaped_output);
+
+            const escaped_name = jsonEscape(self.allocator, entry.node_name) catch continue;
+            defer self.allocator.free(escaped_name);
+
+            const escaped_id = jsonEscape(self.allocator, entry.node_id) catch continue;
+            defer self.allocator.free(escaped_id);
+
+            const node_json = std.fmt.allocPrint(self.allocator,
+                \\"{s}":{{"name":"{s}","output":"{s}","offset":{d},"done":{s},"ok":{s}}}
+            , .{
+                escaped_id,
+                escaped_name,
+                escaped_output,
+                entry.offset,
+                if (entry.done) "true" else "false",
+                if (entry.ok) "true" else "false",
+            }) catch continue;
+            defer self.allocator.free(node_json);
+            resp_buf.appendSlice(self.allocator, node_json) catch {};
+        }
+
+        const tail = std.fmt.allocPrint(self.allocator,
+            \\}},"all_done":{s}}}
+        , .{if (result.all_done) "true" else "false"}) catch {
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(tail);
+        resp_buf.appendSlice(self.allocator, tail) catch {};
+
+        try r.sendJson(resp_buf.items);
+
+        if (result.all_done) {
+            fleet.removeJob(job_id);
+        }
+    }
 };
 
 const AnsibleRunRequest = struct {
@@ -1109,6 +1282,23 @@ const LoginRequest = struct {
 const ChangePasswordRequest = struct {
     current_password: []const u8,
     new_password: []const u8,
+};
+
+// --- Fleet Command Execution ---
+
+const FleetRunRequest = struct {
+    command: []const u8,
+    node_ids: []const []const u8,
+    sudo: bool = false,
+};
+
+const FleetPollRequest = struct {
+    offsets: ?[]const FleetPollOffset = null,
+
+    const FleetPollOffset = struct {
+        node_id: []const u8,
+        offset: usize = 0,
+    };
 };
 
 /// Escape a string for embedding inside a JSON string (between quotes).

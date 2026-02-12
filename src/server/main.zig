@@ -9,6 +9,7 @@ const CryptoEngine = @import("crypto.zig").CryptoEngine;
 const Deployer = @import("deployer.zig").Deployer;
 const Auth = @import("auth.zig").Auth;
 const AnsibleEngine = @import("ansible.zig").AnsibleEngine;
+const FleetEngine = @import("fleet.zig").FleetEngine;
 const terminal_handler = @import("terminal_handler.zig");
 const embedded_ui = @import("embedded_ui");
 
@@ -156,6 +157,15 @@ pub fn main() !void {
         }
     }
 
+    // Init fleet command engine (requires crypto + db)
+    var fleet: ?FleetEngine = null;
+    if (crypto_engine) |*ce| {
+        if (db) |*d| {
+            fleet = FleetEngine.init(allocator, d, ce);
+            std.log.info("[STARMAN] Fleet command engine: enabled", .{});
+        }
+    }
+
     // Init auth (requires crypto + db)
     var auth: ?Auth = null;
     if (crypto_engine) |ce| {
@@ -209,6 +219,7 @@ pub fn main() !void {
     if (deployer) |*dep| global_api.setDeployer(dep);
     if (auth) |*a| global_api.setAuth(a);
     if (ansible) |*a| global_api.setAnsible(a);
+    if (fleet) |*f| global_api.setFleet(f);
     global_api.setWsState(&ws_state);
 
     // Init WebSocket settings

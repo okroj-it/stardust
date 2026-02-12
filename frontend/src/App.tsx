@@ -6,6 +6,7 @@ import { AddNodeModal } from "@/components/add-node-modal"
 import { RemoveNodeModal } from "@/components/remove-node-modal"
 import { ProfileModal } from "@/components/profile-modal"
 import { AnsibleModal } from "@/components/ansible-modal"
+import { FleetCommandModal } from "@/components/fleet-command-modal"
 import { LoginPage } from "@/components/login-page"
 import { isTokenValid, clearToken } from "@/lib/auth"
 import { fetchCapabilities } from "@/lib/api"
@@ -47,6 +48,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
   const [removeNode, setRemoveNode] = useState<string | null>(null)
   const [showProfile, setShowProfile] = useState(false)
   const [showAnsible, setShowAnsible] = useState(false)
+  const [showFleet, setShowFleet] = useState(false)
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null)
 
   useEffect(() => {
@@ -103,6 +105,17 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
                 <span className="text-xs text-emerald-400 font-medium">{onlineCount} online</span>
               </div>
             </div>
+
+            {capabilities?.fleet && (
+              <button
+                onClick={() => setShowFleet(true)}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border/50 bg-card/50 text-sm font-medium hover:bg-muted transition-colors"
+                title="Fleet Command"
+              >
+                <Zap className="w-4 h-4" />
+                Fleet
+              </button>
+            )}
 
             {capabilities?.ansible && (
               <button
@@ -209,6 +222,13 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
           nodes={nodes}
           ansibleVersion={capabilities.ansible_version ?? 'unknown'}
           onClose={() => setShowAnsible(false)}
+        />
+      )}
+
+      {showFleet && capabilities?.fleet && (
+        <FleetCommandModal
+          nodes={nodes}
+          onClose={() => setShowFleet(false)}
         />
       )}
     </div>
