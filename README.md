@@ -7,7 +7,7 @@
 <p align="center">
   <em>A lightweight server monitoring & orchestration platform built in Zig.<br/>
   Deploy zero-dependency agents to your Linux fleet, collect real-time telemetry over WebSockets,<br/>
-  tag and group nodes, open interactive SSH terminals, run fleet-wide commands, manage packages and systemd services, execute Ansible playbooks, detect configuration drift, and export Prometheus metrics — all from a single binary and a clean React dashboard.</em>
+  tag and group nodes, open interactive SSH terminals, run fleet-wide commands, manage packages and systemd services, explore processes with kill signals, execute Ansible playbooks, detect configuration drift, and export Prometheus metrics — all from a single binary and a clean React dashboard.</em>
 </p>
 
 <p align="center">
@@ -40,6 +40,7 @@ Every component draws from David Bowie's *Space Oddity* and *Ziggy Stardust* myt
 | Web Terminal | **Space Oddity** | Browser-based SSH terminal via PTY relay | *"Here am I floating round my tin can"* |
 | Fleet Command | **Starman** | Parallel ad-hoc command execution across nodes | *"There's a starman waiting in the sky"* |
 | Service Manager | **Life on Mars** | Remote systemd service viewer and controller | *"Is there life on Mars?"* |
+| Process Explorer | **Ashes to Ashes** | Browser-based process viewer with kill signals | *"Ashes to ashes, funk to funky"* |
 | Ansible | **Ziggy** | Optional Ansible orchestration engine | *"Ziggy played guitar"* |
 
 ---
@@ -60,6 +61,7 @@ Every component draws from David Bowie's *Space Oddity* and *Ziggy Stardust* myt
                     │                  │──── SSH PTY (Oddity) ───►  │              │
                     │                  │──── SSH (Starman) ────►  │              │
                     │                  │──── SSH (Life on Mars)─►  │              │
+                    │                  │──── SSH (Ashes) ───────►  │              │
                     └────────┬─────────┘                             └─────────────┘
                              │
                     ┌────────▼─────────┐       ┌─────────────────┐
@@ -149,6 +151,17 @@ Spiders auto-detect and report: **OS** (name, version, ID), **kernel**, **archit
 - **Client-side filtering** — Instant search across service names and descriptions
 - **Secure execution** — System-scope commands use sudo with decrypted passwords; user-scope commands set `XDG_RUNTIME_DIR` for non-interactive SSH
 - **Input validation** — Service names are validated server-side to prevent shell injection
+
+### Process Explorer
+
+- **Live process table** — Browser-based top/htop view per node, powered by `ps aux` over SSH
+- **Sortable columns** — Click to sort by CPU, memory, PID, user, RSS, or command (descending by CPU by default)
+- **Client-side filtering** — Instant search across user, PID, and command name
+- **Auto-refresh** — Toggle live mode for 3-second polling, just like a real `top`
+- **Send signals** — SIGTERM (graceful), SIGKILL (force), or SIGHUP (reload) with a confirmation dialog
+- **PID safety** — Server-side validation rejects PID 0 and 1; only signals 1, 9, and 15 are allowed
+- **Expandable rows** — Click any process to see its full command line with arguments
+- **Color-coded metrics** — CPU and memory usage highlighted by severity (green → amber → red)
 
 ### Ansible Integration (Ziggy)
 
@@ -468,6 +481,13 @@ Package actions: `check-updates`, `upgrade`, `full-upgrade`, `list-installed`, `
 | `GET` | `/api/services/:id/status?name=svc&scope=system\|user` | Detailed service status |
 | `POST` | `/api/services/:id/action` | Execute action `{name, action, scope}` (start/stop/restart/enable/disable) |
 
+### Processes (Ashes to Ashes)
+
+| Method | Endpoint | Description |
+|:-------|:---------|:------------|
+| `GET` | `/api/processes/:id/list` | List all processes on a node (`ps aux`) |
+| `POST` | `/api/processes/:id/kill` | Send signal `{pid, signal}` (1=HUP, 9=KILL, 15=TERM) |
+
 ### Drift Detection
 
 | Method | Endpoint | Description |
@@ -483,7 +503,7 @@ Package actions: `check-updates`, `upgrade`, `full-upgrade`, `list-installed`, `
 
 | Method | Endpoint | Description |
 |:-------|:---------|:------------|
-| `GET` | `/api/capabilities` | Server feature flags (ansible, deployer, auth, fleet, services, drift) |
+| `GET` | `/api/capabilities` | Server feature flags (ansible, deployer, auth, fleet, services, processes, drift) |
 | `GET` | `/api/ansible/status` | Ansible version and availability |
 | `POST` | `/api/ansible/run` | Run playbook `{playbook, nodes?, requirements?}` |
 | `POST` | `/api/ansible/poll?job=ID&offset=N` | Poll playbook output |
@@ -550,6 +570,7 @@ stardust/
 │   │   ├── terminal_handler.zig # Space Oddity (web terminal)
 │   │   ├── fleet.zig          # Starman (fleet command execution)
 │   │   ├── services.zig      # Life on Mars (service manager)
+│   │   ├── processes.zig     # Ashes to Ashes (process explorer)
 │   │   ├── drift.zig         # Drift detection (SSH snapshots & parsing)
 │   │   └── ansible.zig       # Ziggy (Ansible integration)
 │   ├── agent/
@@ -577,6 +598,7 @@ stardust/
 │       │   ├── web-terminal.tsx   # SSH terminal (Space Oddity)
 │       │   ├── fleet-command-modal.tsx # Fleet command runner (Starman)
 │       │   ├── service-manager.tsx  # Service viewer/controller (Life on Mars)
+│       │   ├── process-explorer.tsx # Process viewer/killer (Ashes to Ashes)
 │       │   ├── ansible-modal.tsx   # Playbook runner
 │       │   ├── login-page.tsx
 │       │   └── profile-modal.tsx
