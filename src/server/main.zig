@@ -9,6 +9,7 @@ const CryptoEngine = @import("crypto.zig").CryptoEngine;
 const Deployer = @import("deployer.zig").Deployer;
 const Auth = @import("auth.zig").Auth;
 const AnsibleEngine = @import("ansible.zig").AnsibleEngine;
+const terminal_handler = @import("terminal_handler.zig");
 const embedded_ui = @import("embedded_ui");
 
 const version = "0.1.0";
@@ -23,6 +24,7 @@ const Args = struct {
 
 var global_api: Api = undefined;
 var global_ws_settings: ws_handler.WsHandler.WebSocketSettings = undefined;
+var global_terminal_ws_settings: ?terminal_handler.THandler.WebSocketSettings = null;
 
 fn onRequest(r: zap.Request) !void {
     const path = r.path orelse "/";
@@ -56,9 +58,22 @@ fn onRequest(r: zap.Request) !void {
 
 fn onUpgrade(r: zap.Request, target_protocol: []const u8) !void {
     _ = target_protocol;
-    ws_handler.WsHandler.upgrade(r.h, &global_ws_settings) catch |err| {
-        std.log.warn("ws upgrade failed: {}", .{err});
-    };
+    const path = r.path orelse "/ws";
+
+    if (std.mem.eql(u8, path, "/ws/terminal")) {
+        if (global_terminal_ws_settings) |*settings| {
+            terminal_handler.THandler.upgrade(r.h, settings) catch |err| {
+                std.log.warn("[SPACE ODDITY] terminal ws upgrade failed: {}", .{err});
+            };
+        } else {
+            r.setStatus(.service_unavailable);
+            r.sendJson("{\"error\":\"terminal not available\"}") catch {};
+        }
+    } else {
+        ws_handler.WsHandler.upgrade(r.h, &global_ws_settings) catch |err| {
+            std.log.warn("ws upgrade failed: {}", .{err});
+        };
+    }
 }
 
 pub fn main() !void {
@@ -171,6 +186,20 @@ pub fn main() !void {
     }
     if (auth == null) {
         std.log.warn("[GROUND CONTROL] Capsule auth: disabled (requires STARDUST_SECRET)", .{});
+    }
+
+    // Init terminal handler (requires crypto + db + auth)
+    var terminal_state: ?terminal_handler.TerminalState = null;
+    if (auth) |*a| {
+        if (db) |*d| {
+            if (crypto_engine) |*ce| {
+                terminal_state = .{ .allocator = allocator, .db = d, .crypto = ce, .auth = a };
+                std.log.info("[SPACE ODDITY] Web terminal: enabled", .{});
+            }
+        }
+    }
+    if (terminal_state) |*ts| {
+        global_terminal_ws_settings = terminal_handler.getSettings(ts);
     }
 
     // Init API handler

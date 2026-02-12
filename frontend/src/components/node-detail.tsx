@@ -5,6 +5,7 @@ import { StatRing } from "./stat-ring"
 import { CpuCores } from "./cpu-cores"
 import { MiniChart } from "./mini-chart"
 import { TerminalModal } from "./terminal-modal"
+import { WebTerminal } from "./web-terminal"
 import type { NodeStatus } from "@/lib/api"
 import { deployStep } from "@/lib/api"
 import {
@@ -24,6 +25,7 @@ import {
   Package,
   Server,
   RotateCw,
+  SquareTerminal,
 } from "lucide-react"
 
 interface NodeDetailProps {
@@ -36,6 +38,7 @@ export function NodeDetail({ node, onClose, onRemove }: NodeDetailProps) {
   const nodeId = node.agent_id
   const { stats, history } = useNodeStats(nodeId, 5000)
   const [showTerminal, setShowTerminal] = useState(false)
+  const [showShell, setShowShell] = useState(false)
   const [showReinstall, setShowReinstall] = useState(false)
 
   const cpuHistory = history.map((h) => h.cpu.usage_percent)
@@ -74,6 +77,15 @@ export function NodeDetail({ node, onClose, onRemove }: NodeDetailProps) {
           <p className="text-sm text-muted-foreground font-mono">{nodeId}</p>
         </div>
         <div className="flex items-center gap-1">
+          {node.connected && (
+            <button
+              onClick={() => setShowShell(true)}
+              className="p-2 rounded-lg hover:bg-[#58a6ff]/10 text-muted-foreground hover:text-[#58a6ff] transition-colors"
+              title="SSH Terminal"
+            >
+              <SquareTerminal className="w-4 h-4" />
+            </button>
+          )}
           <button
             onClick={() => setShowTerminal(true)}
             className="p-2 rounded-lg hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors"
@@ -268,6 +280,14 @@ export function NodeDetail({ node, onClose, onRemove }: NodeDetailProps) {
           </InfoCard>
         )}
       </div>
+
+      {showShell && (
+        <WebTerminal
+          nodeId={nodeId}
+          nodeName={node.name}
+          onClose={() => setShowShell(false)}
+        />
+      )}
 
       {showTerminal && (
         <TerminalModal
