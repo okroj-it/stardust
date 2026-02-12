@@ -12,6 +12,7 @@ const FleetEngine = @import("fleet.zig").FleetEngine;
 const service_mod = @import("services.zig");
 const ServiceEngine = service_mod.ServiceEngine;
 const ServiceScope = service_mod.ServiceScope;
+const DriftEngine = @import("drift.zig").DriftEngine;
 const common = @import("common");
 
 pub const Api = struct {
@@ -25,6 +26,7 @@ pub const Api = struct {
     ansible: ?*AnsibleEngine = null,
     fleet: ?*FleetEngine = null,
     services: ?*ServiceEngine = null,
+    drift: ?*DriftEngine = null,
 
     pub fn init(allocator: std.mem.Allocator, store: *Store) Api {
         return .{
@@ -67,6 +69,10 @@ pub const Api = struct {
 
     pub fn setServices(self: *Api, s: *ServiceEngine) void {
         self.services = s;
+    }
+
+    pub fn setDrift(self: *Api, d: *DriftEngine) void {
+        self.drift = d;
     }
 
     pub fn handleRequest(self: *Api, r: zap.Request) !void {
@@ -141,6 +147,8 @@ pub const Api = struct {
             try self.handleFleet(r, path);
         } else if (std.mem.startsWith(u8, path, "/api/services/")) {
             try self.handleServices(r, path);
+        } else if (std.mem.startsWith(u8, path, "/api/drift/")) {
+            try self.handleDrift(r, path);
         } else {
             return; // Let static file handler deal with it
         }
@@ -1205,7 +1213,7 @@ pub const Api = struct {
         defer if (ansible_ver != null) self.allocator.free(ver_json);
 
         const resp = std.fmt.allocPrint(self.allocator,
-            \\{{"deployer":{s},"auth":{s},"ansible":{s},"ansible_version":{s},"fleet":{s},"services":{s}}}
+            \\{{"deployer":{s},"auth":{s},"ansible":{s},"ansible_version":{s},"fleet":{s},"services":{s},"drift":{s}}}
         , .{
             if (self.deployer != null) "true" else "false",
             if (self.auth != null) "true" else "false",
@@ -1213,6 +1221,7 @@ pub const Api = struct {
             ver_json,
             if (self.fleet != null) "true" else "false",
             if (self.services != null) "true" else "false",
+            if (self.drift != null) "true" else "false",
         }) catch {
             r.setStatus(.internal_server_error);
             try r.sendJson("{\"error\":\"response serialization failed\"}");
@@ -1697,7 +1706,544 @@ pub const Api = struct {
         defer self.allocator.free(resp);
         try r.sendJson(resp);
     }
+
+    // --- Drift Detection ---
+
+    fn handleDrift(self: *Api, r: zap.Request, path: []const u8) !void {
+        const engine = self.drift orelse {
+            r.setStatus(.service_unavailable);
+            try r.sendJson("{\"error\":\"drift detection not available\"}");
+            return;
+        };
+        const db = self.db orelse {
+            r.setStatus(.service_unavailable);
+            try r.sendJson("{\"error\":\"database not available\"}");
+            return;
+        };
+
+        const after = path["/api/drift/".len..];
+
+        if (std.mem.eql(u8, after, "snapshot") and r.methodAsEnum() == .POST) {
+            try self.handleDriftSnapshot(r, engine, db);
+        } else if (std.mem.eql(u8, after, "snapshots") and r.methodAsEnum() == .GET) {
+            try self.handleDriftListSnapshots(r, db);
+        } else if (std.mem.startsWith(u8, after, "snapshot/") and r.methodAsEnum() == .GET) {
+            const id_str = after["snapshot/".len..];
+            const id = std.fmt.parseInt(i64, id_str, 10) catch {
+                r.setStatus(.bad_request);
+                try r.sendJson("{\"error\":\"invalid snapshot id\"}");
+                return;
+            };
+            try self.handleDriftGetSnapshot(r, db, id);
+        } else if (std.mem.startsWith(u8, after, "snapshot/") and r.methodAsEnum() == .DELETE) {
+            const id_str = after["snapshot/".len..];
+            const id = std.fmt.parseInt(i64, id_str, 10) catch {
+                r.setStatus(.bad_request);
+                try r.sendJson("{\"error\":\"invalid snapshot id\"}");
+                return;
+            };
+            try self.handleDriftDeleteSnapshot(r, db, id);
+        } else if (std.mem.eql(u8, after, "baseline") and r.methodAsEnum() == .POST) {
+            try self.handleDriftSetBaseline(r, db);
+        } else if (std.mem.eql(u8, after, "diff") and r.methodAsEnum() == .POST) {
+            try self.handleDriftDiff(r, db);
+        } else {
+            r.setStatus(.not_found);
+            try r.sendJson("{\"error\":\"not found\"}");
+        }
+    }
+
+    fn handleDriftSnapshot(self: *Api, r: zap.Request, engine: *DriftEngine, db: *Db) !void {
+        const body = r.body orelse {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"missing body\"}");
+            return;
+        };
+
+        const parsed = std.json.parseFromSlice(DriftSnapshotRequest, self.allocator, body, .{ .ignore_unknown_fields = true, .allocate = .alloc_always }) catch {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"invalid JSON\"}");
+            return;
+        };
+        defer parsed.deinit();
+        const req = parsed.value;
+
+        if (req.node_ids.len == 0) {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"node_ids required\"}");
+            return;
+        }
+
+        // Build node name lookup
+        var name_lookup = std.StringHashMapUnmanaged([]const u8){};
+        defer {
+            var it = name_lookup.iterator();
+            while (it.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                self.allocator.free(entry.value_ptr.*);
+            }
+            name_lookup.deinit(self.allocator);
+        }
+        if (db.listNodes(self.allocator)) |nodes| {
+            defer {
+                for (nodes) |n| n.deinit(self.allocator);
+                self.allocator.free(nodes);
+            }
+            for (nodes) |n| {
+                const k = self.allocator.dupe(u8, n.id) catch continue;
+                const v = self.allocator.dupe(u8, n.name) catch {
+                    self.allocator.free(k);
+                    continue;
+                };
+                name_lookup.put(self.allocator, k, v) catch {
+                    self.allocator.free(k);
+                    self.allocator.free(v);
+                };
+            }
+        } else |_| {}
+
+        // Take snapshots
+        var buf: std.ArrayListUnmanaged(u8) = .{};
+        const w = buf.writer(self.allocator);
+        w.writeAll("{\"snapshots\":[") catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"allocation failed\"}");
+            return;
+        };
+
+        var first = true;
+        for (req.node_ids) |node_id| {
+            const result = engine.takeSnapshot(node_id);
+            defer result.deinit(self.allocator);
+
+            if (!result.ok) {
+                // Include error in response
+                if (!first) w.writeByte(',') catch {};
+                first = false;
+                const err_msg = result.err_msg orelse "unknown error";
+                const escaped_err = jsonEscape(self.allocator, err_msg) catch continue;
+                defer self.allocator.free(escaped_err);
+                w.print("{{\"node_id\":\"{s}\",\"error\":\"{s}\"}}", .{ node_id, escaped_err }) catch {};
+                continue;
+            }
+
+            // Store in DB
+            const snap_id = db.insertDriftSnapshot(
+                node_id,
+                result.packages_json,
+                result.services_json,
+                result.ports_json,
+                result.users_json,
+            ) catch {
+                if (!first) w.writeByte(',') catch {};
+                first = false;
+                w.print("{{\"node_id\":\"{s}\",\"error\":\"failed to store snapshot\"}}", .{node_id}) catch {};
+                continue;
+            };
+
+            if (!first) w.writeByte(',') catch {};
+            first = false;
+
+            const node_name = name_lookup.get(node_id) orelse node_id;
+            w.print("{{\"id\":{d},\"node_id\":\"{s}\",\"node_name\":\"{s}\",\"is_baseline\":false,\"created_at\":{d}}}", .{
+                snap_id,
+                node_id,
+                node_name,
+                std.time.timestamp(),
+            }) catch {};
+        }
+
+        w.writeAll("]}") catch {};
+        const resp = buf.toOwnedSlice(self.allocator) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"allocation failed\"}");
+            return;
+        };
+        defer self.allocator.free(resp);
+        try r.sendJson(resp);
+    }
+
+    fn handleDriftListSnapshots(self: *Api, r: zap.Request, db: *Db) !void {
+        const node_id = r.getParamSlice("node_id") orelse {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"node_id required\"}");
+            return;
+        };
+
+        const snapshots = db.listDriftSnapshots(self.allocator, node_id, 50) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"database error\"}");
+            return;
+        };
+        defer {
+            for (snapshots) |s| s.deinit(self.allocator);
+            self.allocator.free(snapshots);
+        }
+
+        var buf: std.ArrayListUnmanaged(u8) = .{};
+        const w = buf.writer(self.allocator);
+        w.writeAll("{\"snapshots\":[") catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"allocation failed\"}");
+            return;
+        };
+
+        for (snapshots, 0..) |s, i| {
+            if (i > 0) w.writeByte(',') catch {};
+            w.print("{{\"id\":{d},\"node_id\":\"{s}\",\"is_baseline\":{s},\"created_at\":{d}}}", .{
+                s.id,
+                s.node_id,
+                if (s.is_baseline) "true" else "false",
+                s.created_at,
+            }) catch {};
+        }
+
+        w.writeAll("]}") catch {};
+        const resp = buf.toOwnedSlice(self.allocator) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"allocation failed\"}");
+            return;
+        };
+        defer self.allocator.free(resp);
+        try r.sendJson(resp);
+    }
+
+    fn handleDriftGetSnapshot(self: *Api, r: zap.Request, db: *Db, id: i64) !void {
+        const snap = db.getDriftSnapshot(self.allocator, id) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"database error\"}");
+            return;
+        } orelse {
+            r.setStatus(.not_found);
+            try r.sendJson("{\"error\":\"snapshot not found\"}");
+            return;
+        };
+        defer snap.deinit(self.allocator);
+
+        const resp = std.fmt.allocPrint(self.allocator,
+            \\{{"id":{d},"node_id":"{s}","is_baseline":{s},"created_at":{d},"packages":{s},"services":{s},"ports":{s},"users":{s}}}
+        , .{
+            snap.id,
+            snap.node_id,
+            if (snap.is_baseline) "true" else "false",
+            snap.created_at,
+            snap.packages orelse "[]",
+            snap.services orelse "[]",
+            snap.ports orelse "[]",
+            snap.users_data orelse "[]",
+        }) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"allocation failed\"}");
+            return;
+        };
+        defer self.allocator.free(resp);
+        try r.sendJson(resp);
+    }
+
+    fn handleDriftDeleteSnapshot(self: *Api, r: zap.Request, db: *Db, id: i64) !void {
+        _ = self;
+        db.deleteDriftSnapshot(id) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"database error\"}");
+            return;
+        };
+        try r.sendJson("{\"ok\":true}");
+    }
+
+    fn handleDriftSetBaseline(self: *Api, r: zap.Request, db: *Db) !void {
+        const body = r.body orelse {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"missing body\"}");
+            return;
+        };
+
+        const parsed = std.json.parseFromSlice(DriftBaselineRequest, self.allocator, body, .{ .ignore_unknown_fields = true, .allocate = .alloc_always }) catch {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"invalid JSON\"}");
+            return;
+        };
+        defer parsed.deinit();
+
+        db.setDriftBaseline(parsed.value.snapshot_id) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"database error\"}");
+            return;
+        };
+        try r.sendJson("{\"ok\":true}");
+    }
+
+    fn handleDriftDiff(self: *Api, r: zap.Request, db: *Db) !void {
+        const body = r.body orelse {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"missing body\"}");
+            return;
+        };
+
+        const parsed = std.json.parseFromSlice(DriftDiffRequest, self.allocator, body, .{ .ignore_unknown_fields = true, .allocate = .alloc_always }) catch {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"invalid JSON\"}");
+            return;
+        };
+        defer parsed.deinit();
+        const req = parsed.value;
+
+        // Get snapshot A
+        const snap_a = db.getDriftSnapshot(self.allocator, req.snapshot_a) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"database error\"}");
+            return;
+        } orelse {
+            r.setStatus(.not_found);
+            try r.sendJson("{\"error\":\"snapshot_a not found\"}");
+            return;
+        };
+        defer snap_a.deinit(self.allocator);
+
+        // Get snapshot B (either explicit ID or baseline for snap_a's node)
+        var snap_b_storage: @import("db.zig").DriftSnapshot = undefined;
+        var snap_b_allocated = false;
+        defer if (snap_b_allocated) snap_b_storage.deinit(self.allocator);
+
+        if (req.snapshot_b) |b_id| {
+            snap_b_storage = db.getDriftSnapshot(self.allocator, b_id) catch {
+                r.setStatus(.internal_server_error);
+                try r.sendJson("{\"error\":\"database error\"}");
+                return;
+            } orelse {
+                r.setStatus(.not_found);
+                try r.sendJson("{\"error\":\"snapshot_b not found\"}");
+                return;
+            };
+            snap_b_allocated = true;
+        } else if (req.baseline orelse false) {
+            snap_b_storage = db.getDriftBaseline(self.allocator, snap_a.node_id) catch {
+                r.setStatus(.internal_server_error);
+                try r.sendJson("{\"error\":\"database error\"}");
+                return;
+            } orelse {
+                r.setStatus(.not_found);
+                try r.sendJson("{\"error\":\"no baseline set for this node\"}");
+                return;
+            };
+            snap_b_allocated = true;
+        } else {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"provide snapshot_b or baseline:true\"}");
+            return;
+        }
+
+        // Compute diffs for each category
+        const pkg_diff = computeDiff(self.allocator, snap_a.packages orelse "[]", snap_b_storage.packages orelse "[]", "name", "version");
+        defer self.allocator.free(pkg_diff);
+        const svc_diff = computeDiff(self.allocator, snap_a.services orelse "[]", snap_b_storage.services orelse "[]", "name", "state");
+        defer self.allocator.free(svc_diff);
+        const port_diff = computeDiff(self.allocator, snap_a.ports orelse "[]", snap_b_storage.ports orelse "[]", "port", "address");
+        defer self.allocator.free(port_diff);
+        const user_diff = computeDiff(self.allocator, snap_a.users_data orelse "[]", snap_b_storage.users_data orelse "[]", "name", "shell");
+        defer self.allocator.free(user_diff);
+
+        const resp = std.fmt.allocPrint(self.allocator,
+            \\{{"snapshot_a":{d},"snapshot_b":{d},"node_a_id":"{s}","node_b_id":"{s}","packages":{s},"services":{s},"ports":{s},"users":{s}}}
+        , .{
+            snap_a.id,
+            snap_b_storage.id,
+            snap_a.node_id,
+            snap_b_storage.node_id,
+            pkg_diff,
+            svc_diff,
+            port_diff,
+            user_diff,
+        }) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"allocation failed\"}");
+            return;
+        };
+        defer self.allocator.free(resp);
+        try r.sendJson(resp);
+    }
 };
+
+const DriftSnapshotRequest = struct {
+    node_ids: []const []const u8,
+};
+
+const DriftBaselineRequest = struct {
+    snapshot_id: i64,
+};
+
+const DriftDiffRequest = struct {
+    snapshot_a: i64,
+    snapshot_b: ?i64 = null,
+    baseline: ?bool = null,
+};
+
+/// Simple JSON array diff: compare two JSON arrays of objects by key field,
+/// report added/removed/changed entries based on a value field.
+fn computeDiff(allocator: std.mem.Allocator, a_json: []const u8, b_json: []const u8, key_field: []const u8, value_field: []const u8) []const u8 {
+    return computeDiffInner(allocator, a_json, b_json, key_field, value_field) catch
+        allocator.dupe(u8, "{\"added\":[],\"removed\":[],\"changed\":[]}") catch "";
+}
+
+fn computeDiffInner(allocator: std.mem.Allocator, a_json: []const u8, b_json: []const u8, key_field: []const u8, value_field: []const u8) ![]const u8 {
+    // Parse both arrays using std.json scanner approach
+    // We'll use a simple approach: extract key-value pairs from JSON arrays
+    var a_map = std.StringHashMapUnmanaged([]const u8){};
+    defer {
+        var it = a_map.iterator();
+        while (it.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            allocator.free(entry.value_ptr.*);
+        }
+        a_map.deinit(allocator);
+    }
+    var b_map = std.StringHashMapUnmanaged([]const u8){};
+    defer {
+        var it = b_map.iterator();
+        while (it.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            allocator.free(entry.value_ptr.*);
+        }
+        b_map.deinit(allocator);
+    }
+
+    try extractKeyValues(allocator, a_json, key_field, value_field, &a_map);
+    try extractKeyValues(allocator, b_json, key_field, value_field, &b_map);
+
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    const w = buf.writer(allocator);
+
+    try w.writeAll("{\"added\":[");
+    // Added: in B but not in A
+    var first = true;
+    {
+        var it = b_map.iterator();
+        while (it.next()) |entry| {
+            if (!a_map.contains(entry.key_ptr.*)) {
+                if (!first) try w.writeByte(',');
+                first = false;
+                try w.writeAll("{\"key\":");
+                writeJsonStr(w, entry.key_ptr.*);
+                try w.writeAll(",\"value\":");
+                writeJsonStr(w, entry.value_ptr.*);
+                try w.writeByte('}');
+            }
+        }
+    }
+
+    try w.writeAll("],\"removed\":[");
+    // Removed: in A but not in B
+    first = true;
+    {
+        var it = a_map.iterator();
+        while (it.next()) |entry| {
+            if (!b_map.contains(entry.key_ptr.*)) {
+                if (!first) try w.writeByte(',');
+                first = false;
+                try w.writeAll("{\"key\":");
+                writeJsonStr(w, entry.key_ptr.*);
+                try w.writeAll(",\"value\":");
+                writeJsonStr(w, entry.value_ptr.*);
+                try w.writeByte('}');
+            }
+        }
+    }
+
+    try w.writeAll("],\"changed\":[");
+    // Changed: in both but different value
+    first = true;
+    {
+        var it = a_map.iterator();
+        while (it.next()) |entry| {
+            if (b_map.get(entry.key_ptr.*)) |b_val| {
+                if (!std.mem.eql(u8, entry.value_ptr.*, b_val)) {
+                    if (!first) try w.writeByte(',');
+                    first = false;
+                    try w.writeAll("{\"key\":");
+                    writeJsonStr(w, entry.key_ptr.*);
+                    try w.writeAll(",\"old_value\":");
+                    writeJsonStr(w, entry.value_ptr.*);
+                    try w.writeAll(",\"new_value\":");
+                    writeJsonStr(w, b_val);
+                    try w.writeByte('}');
+                }
+            }
+        }
+    }
+
+    try w.writeAll("]}");
+    return try buf.toOwnedSlice(allocator);
+}
+
+/// Extract key-value pairs from a JSON array of objects.
+fn extractKeyValues(
+    allocator: std.mem.Allocator,
+    json: []const u8,
+    key_field: []const u8,
+    value_field: []const u8,
+    map: *std.StringHashMapUnmanaged([]const u8),
+) !void {
+    // Use std.json to parse the array
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, json, .{ .allocate = .alloc_always }) catch return;
+    defer parsed.deinit();
+
+    const arr = switch (parsed.value) {
+        .array => |a| a,
+        else => return,
+    };
+
+    for (arr.items) |item| {
+        const obj = switch (item) {
+            .object => |o| o,
+            else => continue,
+        };
+
+        const key_val = obj.get(key_field) orelse continue;
+        const key_str = switch (key_val) {
+            .string => |s| s,
+            .integer => |i| std.fmt.allocPrint(allocator, "{d}", .{i}) catch continue,
+            else => continue,
+        };
+
+        const val_val = obj.get(value_field) orelse continue;
+        const val_str = switch (val_val) {
+            .string => |s| s,
+            .integer => |i| std.fmt.allocPrint(allocator, "{d}", .{i}) catch continue,
+            else => continue,
+        };
+
+        const k = allocator.dupe(u8, key_str) catch continue;
+        const v = allocator.dupe(u8, val_str) catch {
+            allocator.free(k);
+            continue;
+        };
+        map.put(allocator, k, v) catch {
+            allocator.free(k);
+            allocator.free(v);
+        };
+    }
+}
+
+/// Write a JSON-escaped string value (with surrounding quotes) to a writer.
+fn writeJsonStr(w: anytype, s: []const u8) void {
+    w.writeByte('"') catch {};
+    for (s) |c| {
+        switch (c) {
+            '"' => w.writeAll("\\\"") catch {},
+            '\\' => w.writeAll("\\\\") catch {},
+            '\n' => w.writeAll("\\n") catch {},
+            '\r' => w.writeAll("\\r") catch {},
+            '\t' => w.writeAll("\\t") catch {},
+            else => {
+                if (c < 0x20) {
+                    w.print("\\u{x:0>4}", .{c}) catch {};
+                } else {
+                    w.writeByte(c) catch {};
+                }
+            },
+        }
+    }
+    w.writeByte('"') catch {};
+}
 
 const AnsibleRunRequest = struct {
     playbook: []const u8,

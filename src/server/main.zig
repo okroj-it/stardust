@@ -11,6 +11,7 @@ const Auth = @import("auth.zig").Auth;
 const AnsibleEngine = @import("ansible.zig").AnsibleEngine;
 const FleetEngine = @import("fleet.zig").FleetEngine;
 const ServiceEngine = @import("services.zig").ServiceEngine;
+const DriftEngine = @import("drift.zig").DriftEngine;
 const terminal_handler = @import("terminal_handler.zig");
 const embedded_ui = @import("embedded_ui");
 
@@ -176,6 +177,15 @@ pub fn main() !void {
         }
     }
 
+    // Init drift detection engine (requires crypto + db)
+    var drift: ?DriftEngine = null;
+    if (crypto_engine) |*ce| {
+        if (db) |*d| {
+            drift = DriftEngine.init(allocator, d, ce);
+            std.log.info("[DRIFT] Drift detection: enabled", .{});
+        }
+    }
+
     // Init auth (requires crypto + db)
     var auth: ?Auth = null;
     if (crypto_engine) |ce| {
@@ -231,6 +241,7 @@ pub fn main() !void {
     if (ansible) |*a| global_api.setAnsible(a);
     if (fleet) |*f| global_api.setFleet(f);
     if (services) |*s| global_api.setServices(s);
+    if (drift) |*d| global_api.setDrift(d);
     global_api.setWsState(&ws_state);
 
     // Init WebSocket settings

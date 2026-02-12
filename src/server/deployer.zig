@@ -679,11 +679,38 @@ pub const Deployer = struct {
         return job_id;
     }
 
-    /// Start a streaming package job (check-updates, upgrade, full-upgrade).
+    /// Validate a package name or search query: only alphanumeric, hyphens, dots, underscores, plus signs, colons, tildes, spaces.
+    /// Decode '+' characters as spaces. Returns original slice if no '+' found.
+    fn decodePlus(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
+        if (std.mem.indexOfScalar(u8, input, '+') == null) return input;
+        const decoded = try allocator.alloc(u8, input.len);
+        for (input, 0..) |c, i| {
+            decoded[i] = if (c == '+') ' ' else c;
+        }
+        return decoded;
+    }
+
+    fn isValidPkgParam(param: []const u8) bool {
+        if (param.len == 0 or param.len > 200) return false;
+        for (param) |c| {
+            switch (c) {
+                'a'...'z', 'A'...'Z', '0'...'9', '-', '.', '_', '+', ':', '~', ' ' => {},
+                else => return false,
+            }
+        }
+        return true;
+    }
+
+    /// Start a streaming package job (check-updates, upgrade, full-upgrade, list-installed, search:<q>, install:<pkg>, remove:<pkg>).
     /// Returns a job ID or null on failure.
-    pub fn startPkgJob(self: *Deployer, node_id: []const u8, pkg_manager: []const u8, action: []const u8) ?[]const u8 {
+    pub fn startPkgJob(self: *Deployer, node_id: []const u8, pkg_manager: []const u8, raw_action: []const u8) ?[]const u8 {
+        // Decode '+' as space (frontend URL-encodes spaces this way since zap doesn't percent-decode)
+        const action = decodePlus(self.allocator, raw_action) catch return null;
+        defer if (action.ptr != raw_action.ptr) self.allocator.free(action);
+
         const ctx = self.setupSshContext(node_id) catch return null;
 
+        // Static command actions
         const command: ?[]const u8 = if (std.mem.eql(u8, action, "check-updates")) blk: {
             break :blk if (std.mem.eql(u8, pkg_manager, "apt"))
                 "apt-get update >/dev/null 2>&1 && apt-get upgrade -s"
@@ -723,14 +750,89 @@ pub const Deployer = struct {
                 "apk upgrade --available"
             else
                 null;
+        } else if (std.mem.eql(u8, action, "list-installed")) blk: {
+            // Note: commands are wrapped in bash -c '...' so avoid single quotes inside
+            break :blk if (std.mem.eql(u8, pkg_manager, "apt"))
+                "dpkg-query -W"
+            else if (std.mem.eql(u8, pkg_manager, "dnf") or std.mem.eql(u8, pkg_manager, "yum"))
+                "rpm -qa --queryformat \"%{NAME}\\t%{VERSION}-%{RELEASE}\\n\" | sort"
+            else if (std.mem.eql(u8, pkg_manager, "pacman"))
+                "pacman -Q"
+            else if (std.mem.eql(u8, pkg_manager, "apk"))
+                "apk list -I 2>/dev/null"
+            else
+                null;
         } else null;
 
-        if (command == null) {
-            ctx.deinit(self);
-            return null;
+        if (command) |cmd| {
+            return self.startStreamJob(ctx, cmd);
         }
 
-        return self.startStreamJob(ctx, command.?);
+        // Parameterized actions: search:<query>, install:<pkg>, remove:<pkg>
+        if (std.mem.startsWith(u8, action, "search:")) {
+            const param = action["search:".len..];
+            if (!isValidPkgParam(param)) { ctx.deinit(self); return null; }
+            const dyn_cmd = if (std.mem.eql(u8, pkg_manager, "apt"))
+                std.fmt.allocPrint(self.allocator, "apt-cache search {s}", .{param})
+            else if (std.mem.eql(u8, pkg_manager, "dnf"))
+                std.fmt.allocPrint(self.allocator, "dnf search {s}", .{param})
+            else if (std.mem.eql(u8, pkg_manager, "yum"))
+                std.fmt.allocPrint(self.allocator, "yum search {s}", .{param})
+            else if (std.mem.eql(u8, pkg_manager, "pacman"))
+                std.fmt.allocPrint(self.allocator, "pacman -Ss {s}", .{param})
+            else if (std.mem.eql(u8, pkg_manager, "apk"))
+                std.fmt.allocPrint(self.allocator, "apk search {s}", .{param})
+            else {
+                ctx.deinit(self);
+                return null;
+            };
+            const cmd = dyn_cmd catch { ctx.deinit(self); return null; };
+            defer self.allocator.free(cmd);
+            return self.startStreamJob(ctx, cmd);
+        } else if (std.mem.startsWith(u8, action, "install:")) {
+            const param = action["install:".len..];
+            if (!isValidPkgParam(param)) { ctx.deinit(self); return null; }
+            const dyn_cmd = if (std.mem.eql(u8, pkg_manager, "apt"))
+                std.fmt.allocPrint(self.allocator, "DEBIAN_FRONTEND=noninteractive apt-get install -y {s}", .{param})
+            else if (std.mem.eql(u8, pkg_manager, "dnf"))
+                std.fmt.allocPrint(self.allocator, "dnf install -y {s}", .{param})
+            else if (std.mem.eql(u8, pkg_manager, "yum"))
+                std.fmt.allocPrint(self.allocator, "yum install -y {s}", .{param})
+            else if (std.mem.eql(u8, pkg_manager, "pacman"))
+                std.fmt.allocPrint(self.allocator, "pacman -S --noconfirm {s}", .{param})
+            else if (std.mem.eql(u8, pkg_manager, "apk"))
+                std.fmt.allocPrint(self.allocator, "apk add {s}", .{param})
+            else {
+                ctx.deinit(self);
+                return null;
+            };
+            const cmd = dyn_cmd catch { ctx.deinit(self); return null; };
+            defer self.allocator.free(cmd);
+            return self.startStreamJob(ctx, cmd);
+        } else if (std.mem.startsWith(u8, action, "remove:")) {
+            const param = action["remove:".len..];
+            if (!isValidPkgParam(param)) { ctx.deinit(self); return null; }
+            const dyn_cmd = if (std.mem.eql(u8, pkg_manager, "apt"))
+                std.fmt.allocPrint(self.allocator, "DEBIAN_FRONTEND=noninteractive apt-get remove -y {s}", .{param})
+            else if (std.mem.eql(u8, pkg_manager, "dnf"))
+                std.fmt.allocPrint(self.allocator, "dnf remove -y {s}", .{param})
+            else if (std.mem.eql(u8, pkg_manager, "yum"))
+                std.fmt.allocPrint(self.allocator, "yum remove -y {s}", .{param})
+            else if (std.mem.eql(u8, pkg_manager, "pacman"))
+                std.fmt.allocPrint(self.allocator, "pacman -R --noconfirm {s}", .{param})
+            else if (std.mem.eql(u8, pkg_manager, "apk"))
+                std.fmt.allocPrint(self.allocator, "apk del {s}", .{param})
+            else {
+                ctx.deinit(self);
+                return null;
+            };
+            const cmd = dyn_cmd catch { ctx.deinit(self); return null; };
+            defer self.allocator.free(cmd);
+            return self.startStreamJob(ctx, cmd);
+        }
+
+        ctx.deinit(self);
+        return null;
     }
 
     /// Internal: start a streaming SSH job given a prepared SSH context and command.
@@ -766,12 +868,12 @@ pub const Deployer = struct {
         self.jobs_mu.unlock();
 
         const wrapped = if (ctx.sudo_pass) |pass|
-            std.fmt.allocPrint(self.allocator, "echo '{s}' | sudo -S bash -c '{s}' 2>&1", .{ pass, command }) catch {
+            std.fmt.allocPrint(self.allocator, "echo '{s}' | sudo -S -p '' bash -c '{s}' 2>&1", .{ pass, command }) catch {
                 ctx.deinit(self);
                 return null;
             }
         else
-            std.fmt.allocPrint(self.allocator, "sudo bash -c '{s}' 2>&1", .{command}) catch {
+            std.fmt.allocPrint(self.allocator, "sudo -p '' bash -c '{s}' 2>&1", .{command}) catch {
                 ctx.deinit(self);
                 return null;
             };

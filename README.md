@@ -7,7 +7,7 @@
 <p align="center">
   <em>A lightweight server monitoring & orchestration platform built in Zig.<br/>
   Deploy zero-dependency agents to your Linux fleet, collect real-time telemetry over WebSockets,<br/>
-  tag and group nodes, open interactive SSH terminals, run fleet-wide commands, manage packages and systemd services, execute Ansible playbooks, and export Prometheus metrics — all from a single binary and a clean React dashboard.</em>
+  tag and group nodes, open interactive SSH terminals, run fleet-wide commands, manage packages and systemd services, execute Ansible playbooks, detect configuration drift, and export Prometheus metrics — all from a single binary and a clean React dashboard.</em>
 </p>
 
 <p align="center">
@@ -112,9 +112,14 @@ Spiders auto-detect and report: **OS** (name, version, ID), **kernel**, **archit
 ### Package Management
 
 - **Unified interface** for `apt`, `dnf`, `yum`, `pacman`, and `apk`
+- **Tabbed UI** — Upgrades, Installed, and Search tabs in one terminal-style modal
 - **Check for updates** — See available upgrades in a sortable table
 - **Upgrade / Full Upgrade** — Run upgrades with live streaming terminal output
+- **List installed** — Browse all installed packages in a searchable, filterable table
+- **Search** — Query the package cache and install packages directly from search results
+- **Install / Remove** — One-click install and uninstall with real-time progress overlay
 - **Cache refresh** — Update package indexes remotely
+- **Shell injection prevention** — Package names and search queries validated server-side against a strict character allowlist
 
 ### Web Terminal (Space Oddity)
 
@@ -172,6 +177,20 @@ Spiders auto-detect and report: **OS** (name, version, ID), **kernel**, **archit
 - **Tag-based targeting** — Fleet Command and Ansible modals let you select/deselect nodes by tag in one click
 - **Autocomplete** — Tag input suggests existing tags from across your fleet
 - **Clean lifecycle** — Tags are automatically removed when a node is deleted
+
+### Drift Detection
+
+- **Configuration snapshots** — Capture installed packages, running services, listening ports, and system users via SSH
+- **Package manager auto-detection** — Uses the node's detected package manager (`apt`/`dpkg`, `dnf`/`yum`/`rpm`, `pacman`, `apk`) for accurate package listing
+- **Baseline management** — Set any snapshot as the baseline for a node; future snapshots can be diffed against it
+- **Cross-snapshot diff** — Compare any two snapshots with color-coded results: added (green), removed (red), drifted (amber)
+- **Cross-node comparison** — Compare snapshots between different nodes to find configuration differences across your fleet
+- **Filter toggles** — Focus on specific drift types: items only in source, only in target, or drifted between both
+- **Text search** — Filter diff entries by name across all categories
+- **Remediation actions** — Install missing packages on either node directly from the diff view
+- **Version-aware updates** — For drifted packages with differing versions, proposes updating the node running the older version
+- **Snapshot history** — Browse and manage historical snapshots per node with timestamps
+- **Tabbed results** — View snapshot data organized by category (Packages, Services, Ports, Users) in sortable tables
 
 ### Prometheus Metrics
 
@@ -432,7 +451,7 @@ All endpoints (except health, metrics, and login) require `Authorization: Bearer
 | `POST` | `/api/nodes/:id/deploy?step=pkg-refresh-poll&job=ID&offset=N` | Poll job output |
 | `POST` | `/api/nodes/:id/deploy?step=pkg-job-start&pkg=apt&action=check-updates` | Start package job |
 
-Package actions: `check-updates`, `upgrade`, `full-upgrade`
+Package actions: `check-updates`, `upgrade`, `full-upgrade`, `list-installed`, `search:<query>`, `install:<package>`, `remove:<package>`
 
 ### Fleet Command (Starman)
 
@@ -449,11 +468,22 @@ Package actions: `check-updates`, `upgrade`, `full-upgrade`
 | `GET` | `/api/services/:id/status?name=svc&scope=system\|user` | Detailed service status |
 | `POST` | `/api/services/:id/action` | Execute action `{name, action, scope}` (start/stop/restart/enable/disable) |
 
+### Drift Detection
+
+| Method | Endpoint | Description |
+|:-------|:---------|:------------|
+| `POST` | `/api/drift/snapshot` | Take snapshot `{node_ids: [...]}`, returns snapshot summaries |
+| `GET` | `/api/drift/snapshots?node_id=ID` | List snapshots for a node |
+| `GET` | `/api/drift/snapshot/:id` | Get full snapshot data |
+| `POST` | `/api/drift/baseline` | Set baseline `{snapshot_id}` |
+| `POST` | `/api/drift/diff` | Compare snapshots `{snapshot_a, snapshot_b?}` or `{snapshot_a, baseline: true}` |
+| `DELETE` | `/api/drift/snapshot/:id` | Delete a snapshot |
+
 ### Ansible
 
 | Method | Endpoint | Description |
 |:-------|:---------|:------------|
-| `GET` | `/api/capabilities` | Server feature flags (ansible, deployer, auth, fleet, services) |
+| `GET` | `/api/capabilities` | Server feature flags (ansible, deployer, auth, fleet, services, drift) |
 | `GET` | `/api/ansible/status` | Ansible version and availability |
 | `POST` | `/api/ansible/run` | Run playbook `{playbook, nodes?, requirements?}` |
 | `POST` | `/api/ansible/poll?job=ID&offset=N` | Poll playbook output |
@@ -520,6 +550,7 @@ stardust/
 │   │   ├── terminal_handler.zig # Space Oddity (web terminal)
 │   │   ├── fleet.zig          # Starman (fleet command execution)
 │   │   ├── services.zig      # Life on Mars (service manager)
+│   │   ├── drift.zig         # Drift detection (SSH snapshots & parsing)
 │   │   └── ansible.zig       # Ziggy (Ansible integration)
 │   ├── agent/
 │   │   ├── main.zig          # Spider entry point
@@ -541,7 +572,8 @@ stardust/
 │       │   ├── node-detail.tsx     # Deep-dive metrics panel
 │       │   ├── add-node-modal.tsx  # Onboarding wizard
 │       │   ├── remove-node-modal.tsx
-│       │   ├── terminal-modal.tsx  # Package management
+│       │   ├── terminal-modal.tsx  # Package manager (search, install, upgrade, remove)
+│       │   ├── drift-modal.tsx    # Drift detection & cross-node comparison
 │       │   ├── web-terminal.tsx   # SSH terminal (Space Oddity)
 │       │   ├── fleet-command-modal.tsx # Fleet command runner (Starman)
 │       │   ├── service-manager.tsx  # Service viewer/controller (Life on Mars)

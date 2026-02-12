@@ -7,6 +7,7 @@ import { RemoveNodeModal } from "@/components/remove-node-modal"
 import { ProfileModal } from "@/components/profile-modal"
 import { AnsibleModal } from "@/components/ansible-modal"
 import { FleetCommandModal } from "@/components/fleet-command-modal"
+import { DriftModal } from "@/components/drift-modal"
 import { LoginPage } from "@/components/login-page"
 import { isTokenValid, clearToken } from "@/lib/auth"
 import { fetchCapabilities, fetchAllTags } from "@/lib/api"
@@ -19,6 +20,7 @@ import {
   UserCircle,
   Terminal,
   Tag,
+  Shield,
 } from "lucide-react"
 
 function App() {
@@ -50,6 +52,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
   const [showProfile, setShowProfile] = useState(false)
   const [showAnsible, setShowAnsible] = useState(false)
   const [showFleet, setShowFleet] = useState(false)
+  const [showDrift, setShowDrift] = useState(false)
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null)
   const [allTags, setAllTags] = useState<string[]>([])
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set())
@@ -146,6 +149,17 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
               >
                 <Terminal className="w-4 h-4" />
                 Ansible
+              </button>
+            )}
+
+            {capabilities?.drift && (
+              <button
+                onClick={() => setShowDrift(true)}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border/50 bg-card/50 text-sm font-medium hover:bg-muted transition-colors"
+                title="Drift Detection"
+              >
+                <Shield className="w-4 h-4" />
+                Drift
               </button>
             )}
 
@@ -285,6 +299,13 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
         <FleetCommandModal
           nodes={nodes}
           onClose={() => setShowFleet(false)}
+        />
+      )}
+
+      {showDrift && capabilities?.drift && (
+        <DriftModal
+          nodes={nodes}
+          onClose={() => setShowDrift(false)}
         />
       )}
     </div>

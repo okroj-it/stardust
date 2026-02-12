@@ -52,6 +52,25 @@ pub const NodeRecord = struct {
     }
 };
 
+pub const DriftSnapshot = struct {
+    id: i64,
+    node_id: []const u8,
+    packages: ?[]const u8,
+    services: ?[]const u8,
+    ports: ?[]const u8,
+    users_data: ?[]const u8,
+    is_baseline: bool,
+    created_at: i64,
+
+    pub fn deinit(self: DriftSnapshot, allocator: std.mem.Allocator) void {
+        allocator.free(self.node_id);
+        if (self.packages) |v| allocator.free(v);
+        if (self.services) |v| allocator.free(v);
+        if (self.ports) |v| allocator.free(v);
+        if (self.users_data) |v| allocator.free(v);
+    }
+};
+
 pub const Db = struct {
     conn: zqlite.Conn,
 
@@ -98,6 +117,19 @@ pub const Db = struct {
             \\    node_id TEXT NOT NULL,
             \\    tag     TEXT NOT NULL,
             \\    UNIQUE(node_id, tag)
+            \\)
+        );
+
+        try conn.execNoArgs(
+            \\CREATE TABLE IF NOT EXISTS drift_snapshots (
+            \\    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            \\    node_id     TEXT NOT NULL,
+            \\    packages    TEXT,
+            \\    services    TEXT,
+            \\    ports       TEXT,
+            \\    users_data  TEXT,
+            \\    is_baseline INTEGER DEFAULT 0,
+            \\    created_at  INTEGER NOT NULL
             \\)
         );
 
@@ -433,5 +465,115 @@ pub const Db = struct {
             try result.append(allocator, try allocator.dupe(u8, row.text(0)));
         }
         return try result.toOwnedSlice(allocator);
+    }
+
+    // --- Drift Snapshots ---
+
+    /// Insert a drift snapshot. Returns the row ID.
+    pub fn insertDriftSnapshot(
+        self: *Db,
+        node_id: []const u8,
+        packages: ?[]const u8,
+        services: ?[]const u8,
+        ports: ?[]const u8,
+        users_data: ?[]const u8,
+    ) !i64 {
+        try self.conn.exec(
+            \\INSERT INTO drift_snapshots (node_id, packages, services, ports, users_data, created_at)
+            \\VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        , .{ node_id, packages, services, ports, users_data, std.time.timestamp() });
+        const r = try self.conn.row("SELECT last_insert_rowid()", .{});
+        if (r) |row| {
+            defer row.deinit();
+            return row.int(0);
+        }
+        return error.InsertFailed;
+    }
+
+    /// Get a drift snapshot by ID. Caller must call deinit.
+    pub fn getDriftSnapshot(self: *Db, allocator: std.mem.Allocator, id: i64) !?DriftSnapshot {
+        const r = try self.conn.row(
+            "SELECT id, node_id, packages, services, ports, users_data, is_baseline, created_at FROM drift_snapshots WHERE id = ?1",
+            .{id},
+        );
+        if (r) |row| {
+            defer row.deinit();
+            return DriftSnapshot{
+                .id = row.int(0),
+                .node_id = try allocator.dupe(u8, row.text(1)),
+                .packages = if (row.nullableText(2)) |v| try allocator.dupe(u8, v) else null,
+                .services = if (row.nullableText(3)) |v| try allocator.dupe(u8, v) else null,
+                .ports = if (row.nullableText(4)) |v| try allocator.dupe(u8, v) else null,
+                .users_data = if (row.nullableText(5)) |v| try allocator.dupe(u8, v) else null,
+                .is_baseline = row.int(6) != 0,
+                .created_at = row.int(7),
+            };
+        }
+        return null;
+    }
+
+    /// Get the baseline snapshot for a node. Caller must call deinit.
+    pub fn getDriftBaseline(self: *Db, allocator: std.mem.Allocator, node_id: []const u8) !?DriftSnapshot {
+        const r = try self.conn.row(
+            "SELECT id, node_id, packages, services, ports, users_data, is_baseline, created_at FROM drift_snapshots WHERE node_id = ?1 AND is_baseline = 1",
+            .{node_id},
+        );
+        if (r) |row| {
+            defer row.deinit();
+            return DriftSnapshot{
+                .id = row.int(0),
+                .node_id = try allocator.dupe(u8, row.text(1)),
+                .packages = if (row.nullableText(2)) |v| try allocator.dupe(u8, v) else null,
+                .services = if (row.nullableText(3)) |v| try allocator.dupe(u8, v) else null,
+                .ports = if (row.nullableText(4)) |v| try allocator.dupe(u8, v) else null,
+                .users_data = if (row.nullableText(5)) |v| try allocator.dupe(u8, v) else null,
+                .is_baseline = true,
+                .created_at = row.int(7),
+            };
+        }
+        return null;
+    }
+
+    /// Set a snapshot as the baseline for its node (clears previous baseline).
+    pub fn setDriftBaseline(self: *Db, id: i64) !void {
+        // Get the node_id for this snapshot
+        const r = try self.conn.row("SELECT node_id FROM drift_snapshots WHERE id = ?1", .{id});
+        if (r) |row| {
+            defer row.deinit();
+            const node_id = row.text(0);
+            // Clear existing baseline for this node
+            try self.conn.exec("UPDATE drift_snapshots SET is_baseline = 0 WHERE node_id = ?1 AND is_baseline = 1", .{node_id});
+        }
+        // Set the new baseline
+        try self.conn.exec("UPDATE drift_snapshots SET is_baseline = 1 WHERE id = ?1", .{id});
+    }
+
+    /// List drift snapshots for a node. Caller must deinit each and free the slice.
+    pub fn listDriftSnapshots(self: *Db, allocator: std.mem.Allocator, node_id: []const u8, limit: i64) ![]DriftSnapshot {
+        var rows = try self.conn.rows(
+            "SELECT id, node_id, packages, services, ports, users_data, is_baseline, created_at FROM drift_snapshots WHERE node_id = ?1 ORDER BY created_at DESC LIMIT ?2",
+            .{ node_id, limit },
+        );
+        defer rows.deinit();
+
+        var result: std.ArrayListUnmanaged(DriftSnapshot) = .{};
+        while (rows.next()) |row| {
+            try result.append(allocator, DriftSnapshot{
+                .id = row.int(0),
+                .node_id = try allocator.dupe(u8, row.text(1)),
+                .packages = if (row.nullableText(2)) |v| try allocator.dupe(u8, v) else null,
+                .services = if (row.nullableText(3)) |v| try allocator.dupe(u8, v) else null,
+                .ports = if (row.nullableText(4)) |v| try allocator.dupe(u8, v) else null,
+                .users_data = if (row.nullableText(5)) |v| try allocator.dupe(u8, v) else null,
+                .is_baseline = row.int(6) != 0,
+                .created_at = row.int(7),
+            });
+        }
+        return try result.toOwnedSlice(allocator);
+    }
+
+    /// Delete a drift snapshot.
+    pub fn deleteDriftSnapshot(self: *Db, id: i64) !void {
+        try self.conn.exec("DELETE FROM drift_snapshots WHERE id = ?1", .{id});
     }
 };

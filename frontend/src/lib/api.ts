@@ -311,9 +311,12 @@ export async function pkgRefreshPoll(nodeId: string, jobId: string, offset: numb
 }
 
 export type PkgAction = 'check-updates' | 'upgrade' | 'full-upgrade'
+  | 'list-installed' | `search:${string}` | `install:${string}` | `remove:${string}`
 
 export async function pkgJobStart(nodeId: string, pkgManager: string, action: PkgAction): Promise<string> {
-  const res = await apiFetch(`${BASE}/api/nodes/${nodeId}/deploy?step=pkg-job-start&pkg=${pkgManager}&action=${action}`, {
+  // Replace spaces with + for URL safety (zap doesn't URL-decode query params)
+  const encodedAction = action.replace(/ /g, '+')
+  const res = await apiFetch(`${BASE}/api/nodes/${nodeId}/deploy?step=pkg-job-start&pkg=${pkgManager}&action=${encodedAction}`, {
     method: 'POST',
   })
   if (!res.ok) {
@@ -344,11 +347,12 @@ export interface Capabilities {
   ansible_version?: string | null
   fleet: boolean
   services: boolean
+  drift: boolean
 }
 
 export async function fetchCapabilities(): Promise<Capabilities> {
   const res = await apiFetch(`${BASE}/api/capabilities`)
-  if (!res.ok) return { deployer: false, auth: false, ansible: false, fleet: false, services: false }
+  if (!res.ok) return { deployer: false, auth: false, ansible: false, fleet: false, services: false, drift: false }
   return res.json()
 }
 
@@ -533,4 +537,115 @@ export function parseServiceList(output: string): ServiceInfo[] {
     }
   }
   return services
+}
+
+// --- Drift Detection ---
+
+export interface DriftPackageEntry { name: string; version: string }
+export interface DriftServiceEntry { name: string; state: string; sub_state: string }
+export interface DriftPortEntry { proto: string; address: string; port: string }
+export interface DriftUserEntry { name: string; uid: string; gid: string; home: string; shell: string }
+
+export interface DriftSnapshotSummary {
+  id: number
+  node_id: string
+  node_name?: string
+  is_baseline: boolean
+  created_at: number
+  error?: string
+}
+
+export interface DriftSnapshot extends DriftSnapshotSummary {
+  packages: DriftPackageEntry[]
+  services: DriftServiceEntry[]
+  ports: DriftPortEntry[]
+  users: DriftUserEntry[]
+}
+
+export interface DriftDiffEntry { key: string; value: string }
+export interface DriftChangedEntry { key: string; old_value: string; new_value: string }
+
+export interface DriftCategoryDiff {
+  added: DriftDiffEntry[]
+  removed: DriftDiffEntry[]
+  changed: DriftChangedEntry[]
+}
+
+export interface DriftDiffResult {
+  snapshot_a: number
+  snapshot_b: number
+  node_a_id: string
+  node_b_id: string
+  packages: DriftCategoryDiff
+  services: DriftCategoryDiff
+  ports: DriftCategoryDiff
+  users: DriftCategoryDiff
+}
+
+export async function driftSnapshot(nodeIds: string[]): Promise<{ snapshots: DriftSnapshotSummary[] }> {
+  const res = await apiFetch(`${BASE}/api/drift/snapshot`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ node_ids: nodeIds }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function driftListSnapshots(nodeId: string): Promise<{ snapshots: DriftSnapshotSummary[] }> {
+  const res = await apiFetch(`${BASE}/api/drift/snapshots?node_id=${nodeId}`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function driftGetSnapshot(id: number): Promise<DriftSnapshot> {
+  const res = await apiFetch(`${BASE}/api/drift/snapshot/${id}`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function driftSetBaseline(snapshotId: number): Promise<void> {
+  const res = await apiFetch(`${BASE}/api/drift/baseline`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ snapshot_id: snapshotId }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+}
+
+export async function driftDiff(snapshotA: number, snapshotB?: number, baseline?: boolean): Promise<DriftDiffResult> {
+  const res = await apiFetch(`${BASE}/api/drift/diff`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      snapshot_a: snapshotA,
+      ...(snapshotB != null ? { snapshot_b: snapshotB } : {}),
+      ...(baseline ? { baseline: true } : {}),
+    }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function driftDeleteSnapshot(id: number): Promise<void> {
+  const res = await apiFetch(`${BASE}/api/drift/snapshot/${id}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
 }
