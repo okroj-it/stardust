@@ -8,6 +8,7 @@ const Db = @import("db.zig").Db;
 const CryptoEngine = @import("crypto.zig").CryptoEngine;
 const Deployer = @import("deployer.zig").Deployer;
 const Auth = @import("auth.zig").Auth;
+const AnsibleEngine = @import("ansible.zig").AnsibleEngine;
 const embedded_ui = @import("embedded_ui");
 
 const version = "0.1.0";
@@ -132,6 +133,14 @@ pub fn main() !void {
         }
     }
 
+    // Init Ansible (requires crypto + db, auto-detects ansible-playbook)
+    var ansible: ?AnsibleEngine = null;
+    if (crypto_engine) |*ce| {
+        if (db) |*d| {
+            ansible = AnsibleEngine.detect(allocator, d, ce);
+        }
+    }
+
     // Init auth (requires crypto + db)
     var auth: ?Auth = null;
     if (crypto_engine) |ce| {
@@ -170,6 +179,7 @@ pub fn main() !void {
     if (crypto_engine) |*ce| global_api.setCrypto(ce);
     if (deployer) |*dep| global_api.setDeployer(dep);
     if (auth) |*a| global_api.setAuth(a);
+    if (ansible) |*a| global_api.setAnsible(a);
     global_api.setWsState(&ws_state);
 
     // Init WebSocket settings

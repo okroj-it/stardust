@@ -316,6 +316,52 @@ export interface UpgradablePackage {
   newVersion: string
 }
 
+// --- Capabilities ---
+
+export interface Capabilities {
+  deployer: boolean
+  auth: boolean
+  ansible: boolean
+  ansible_version?: string | null
+}
+
+export async function fetchCapabilities(): Promise<Capabilities> {
+  const res = await apiFetch(`${BASE}/api/capabilities`)
+  if (!res.ok) return { deployer: false, auth: false, ansible: false }
+  return res.json()
+}
+
+// --- Ansible ---
+
+export async function ansibleRun(playbook: string, nodes?: string[], requirements?: string): Promise<string> {
+  const res = await apiFetch(`${BASE}/api/ansible/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      playbook,
+      nodes: nodes && nodes.length > 0 ? nodes : null,
+      requirements: requirements && requirements.trim() ? requirements.trim() : null,
+    }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+  const data = await res.json()
+  return data.job_id
+}
+
+export async function ansiblePoll(jobId: string, offset: number): Promise<PkgPollResult> {
+  const res = await apiFetch(`${BASE}/api/ansible/poll?job=${jobId}&offset=${offset}`, {
+    method: 'POST',
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
 export function parseUpgradablePackages(output: string, pkgManager: string): UpgradablePackage[] {
   const packages: UpgradablePackage[] = []
 

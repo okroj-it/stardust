@@ -7,6 +7,7 @@ const deployer_mod = @import("deployer.zig");
 const Deployer = deployer_mod.Deployer;
 const Auth = @import("auth.zig").Auth;
 const WsState = @import("ws_handler.zig").WsState;
+const AnsibleEngine = @import("ansible.zig").AnsibleEngine;
 
 pub const Api = struct {
     allocator: std.mem.Allocator,
@@ -16,6 +17,7 @@ pub const Api = struct {
     deployer: ?*Deployer,
     auth: ?*const Auth = null,
     ws_state: ?*WsState = null,
+    ansible: ?*AnsibleEngine = null,
 
     pub fn init(allocator: std.mem.Allocator, store: *Store) Api {
         return .{
@@ -46,6 +48,10 @@ pub const Api = struct {
 
     pub fn setWsState(self: *Api, ws: *WsState) void {
         self.ws_state = ws;
+    }
+
+    pub fn setAnsible(self: *Api, a: *AnsibleEngine) void {
+        self.ansible = a;
     }
 
     pub fn handleRequest(self: *Api, r: zap.Request) !void {
@@ -98,7 +104,9 @@ pub const Api = struct {
         }
 
         // Protected routes
-        if (std.mem.eql(u8, path, "/api/auth/password")) {
+        if (std.mem.eql(u8, path, "/api/capabilities")) {
+            try self.handleCapabilities(r);
+        } else if (std.mem.eql(u8, path, "/api/auth/password")) {
             try self.handleChangePassword(r);
         } else if (std.mem.eql(u8, path, "/api/nodes/check")) {
             try self.handleNodeCheck(r);
@@ -106,6 +114,8 @@ pub const Api = struct {
             try self.handleNodes(r);
         } else if (std.mem.startsWith(u8, path, "/api/nodes/")) {
             try self.handleNodeDetail(r, path);
+        } else if (std.mem.startsWith(u8, path, "/api/ansible/")) {
+            try self.handleAnsible(r, path);
         } else {
             return; // Let static file handler deal with it
         }
@@ -903,6 +913,170 @@ pub const Api = struct {
 
         try r.sendJson(resp);
     }
+
+    // --- Capabilities ---
+
+    fn handleCapabilities(self: *Api, r: zap.Request) !void {
+        if (r.methodAsEnum() != .GET) {
+            r.setStatus(.method_not_allowed);
+            try r.sendJson("{\"error\":\"method not allowed\"}");
+            return;
+        }
+
+        const ansible_ver = if (self.ansible) |a| a.version else null;
+        const ver_json = if (ansible_ver) |v| blk: {
+            const j = std.fmt.allocPrint(self.allocator, "\"{s}\"", .{v}) catch break :blk @as([]const u8, "null");
+            break :blk j;
+        } else @as([]const u8, "null");
+        defer if (ansible_ver != null) self.allocator.free(ver_json);
+
+        const resp = std.fmt.allocPrint(self.allocator,
+            \\{{"deployer":{s},"auth":{s},"ansible":{s},"ansible_version":{s}}}
+        , .{
+            if (self.deployer != null) "true" else "false",
+            if (self.auth != null) "true" else "false",
+            if (self.ansible != null) "true" else "false",
+            ver_json,
+        }) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(resp);
+        try r.sendJson(resp);
+    }
+
+    // --- Ansible ---
+
+    fn handleAnsible(self: *Api, r: zap.Request, path: []const u8) !void {
+        const ansible = self.ansible orelse {
+            r.setStatus(.service_unavailable);
+            try r.sendJson("{\"error\":\"ansible not available\"}");
+            return;
+        };
+
+        if (std.mem.eql(u8, path, "/api/ansible/status")) {
+            if (r.methodAsEnum() != .GET) {
+                r.setStatus(.method_not_allowed);
+                try r.sendJson("{\"error\":\"method not allowed\"}");
+                return;
+            }
+            const resp = std.fmt.allocPrint(self.allocator,
+                \\{{"available":true,"version":"{s}"}}
+            , .{ansible.version}) catch {
+                try r.sendJson("{\"error\":\"response serialization failed\"}");
+                return;
+            };
+            defer self.allocator.free(resp);
+            try r.sendJson(resp);
+        } else if (std.mem.eql(u8, path, "/api/ansible/run")) {
+            try self.handleAnsibleRun(r, ansible);
+        } else if (std.mem.eql(u8, path, "/api/ansible/poll")) {
+            try self.handleAnsiblePoll(r, ansible);
+        } else {
+            r.setStatus(.not_found);
+            try r.sendJson("{\"error\":\"not found\"}");
+        }
+    }
+
+    fn handleAnsibleRun(self: *Api, r: zap.Request, ansible: *AnsibleEngine) !void {
+        if (r.methodAsEnum() != .POST) {
+            r.setStatus(.method_not_allowed);
+            try r.sendJson("{\"error\":\"method not allowed\"}");
+            return;
+        }
+
+        const body = r.body orelse {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"missing request body\"}");
+            return;
+        };
+
+        // Parse JSON body: { "playbook": "...", "nodes": ["id1","id2"] | null }
+        const parsed = std.json.parseFromSlice(AnsibleRunRequest, self.allocator, body, .{ .ignore_unknown_fields = true }) catch {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"invalid JSON\"}");
+            return;
+        };
+        defer parsed.deinit();
+        const req = parsed.value;
+
+        if (req.playbook.len == 0) {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"playbook content is required\"}");
+            return;
+        }
+
+        // Pass node IDs and requirements if provided
+        const job_id = ansible.runPlaybook(req.playbook, req.nodes, req.requirements) orelse {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"failed to start playbook\"}");
+            return;
+        };
+
+        const resp = std.fmt.allocPrint(self.allocator,
+            \\{{"job_id":"{s}"}}
+        , .{job_id}) catch {
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(resp);
+        try r.sendJson(resp);
+    }
+
+    fn handleAnsiblePoll(self: *Api, r: zap.Request, ansible: *AnsibleEngine) !void {
+        if (r.methodAsEnum() != .POST) {
+            r.setStatus(.method_not_allowed);
+            try r.sendJson("{\"error\":\"method not allowed\"}");
+            return;
+        }
+
+        r.parseQuery();
+        const job_id = r.getParamSlice("job") orelse {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"missing job parameter\"}");
+            return;
+        };
+        const offset_str = r.getParamSlice("offset") orelse "0";
+        const offset = std.fmt.parseInt(usize, offset_str, 10) catch 0;
+
+        const state = ansible.pollJob(job_id, offset) orelse {
+            r.setStatus(.not_found);
+            try r.sendJson("{\"error\":\"job not found\"}");
+            return;
+        };
+
+        const escaped = jsonEscape(self.allocator, state.new_output) catch {
+            try r.sendJson("{\"error\":\"encode failed\"}");
+            return;
+        };
+        defer self.allocator.free(escaped);
+
+        const new_offset = offset + state.new_output.len;
+        const poll_resp = std.fmt.allocPrint(self.allocator,
+            \\{{"output":"{s}","offset":{d},"done":{s},"ok":{s}}}
+        , .{
+            escaped,
+            new_offset,
+            if (state.done) "true" else "false",
+            if (state.ok) "true" else "false",
+        }) catch {
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(poll_resp);
+        try r.sendJson(poll_resp);
+
+        if (state.done) {
+            ansible.removeJob(job_id);
+        }
+    }
+};
+
+const AnsibleRunRequest = struct {
+    playbook: []const u8,
+    nodes: ?[]const []const u8 = null,
+    requirements: ?[]const u8 = null,
 };
 
 const AddNodeRequest = struct {

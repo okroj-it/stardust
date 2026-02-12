@@ -5,14 +5,18 @@ import { NodeDetail } from "@/components/node-detail"
 import { AddNodeModal } from "@/components/add-node-modal"
 import { RemoveNodeModal } from "@/components/remove-node-modal"
 import { ProfileModal } from "@/components/profile-modal"
+import { AnsibleModal } from "@/components/ansible-modal"
 import { LoginPage } from "@/components/login-page"
 import { isTokenValid, clearToken } from "@/lib/auth"
+import { fetchCapabilities } from "@/lib/api"
+import type { Capabilities } from "@/lib/api"
 import {
   Server,
   Activity,
   Plus,
   Zap,
   UserCircle,
+  Terminal,
 } from "lucide-react"
 
 function App() {
@@ -42,6 +46,12 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
   const [showAddModal, setShowAddModal] = useState(false)
   const [removeNode, setRemoveNode] = useState<string | null>(null)
   const [showProfile, setShowProfile] = useState(false)
+  const [showAnsible, setShowAnsible] = useState(false)
+  const [capabilities, setCapabilities] = useState<Capabilities | null>(null)
+
+  useEffect(() => {
+    fetchCapabilities().then(setCapabilities).catch(() => {})
+  }, [])
 
   const onlineCount = nodes.filter((n) => n.connected).length
 
@@ -93,6 +103,17 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
                 <span className="text-xs text-emerald-400 font-medium">{onlineCount} online</span>
               </div>
             </div>
+
+            {capabilities?.ansible && (
+              <button
+                onClick={() => setShowAnsible(true)}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border/50 bg-card/50 text-sm font-medium hover:bg-muted transition-colors"
+                title="Run Ansible Playbooks"
+              >
+                <Terminal className="w-4 h-4" />
+                Ansible
+              </button>
+            )}
 
             <button
               onClick={() => setShowAddModal(true)}
@@ -180,6 +201,14 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
         <ProfileModal
           onClose={() => setShowProfile(false)}
           onLogout={onLogout}
+        />
+      )}
+
+      {showAnsible && capabilities?.ansible && (
+        <AnsibleModal
+          nodes={nodes}
+          ansibleVersion={capabilities.ansible_version ?? 'unknown'}
+          onClose={() => setShowAnsible(false)}
         />
       )}
     </div>
