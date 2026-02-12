@@ -19,5 +19,8 @@ ui/
 CLAUDE.md
 *.tmp.*
 
+# Docs (local only)
+ROADMAP.md
+
 # OS
 .DS_Store

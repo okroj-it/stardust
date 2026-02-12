@@ -276,7 +276,7 @@ fn parseArgs() Args {
         } else if (std.mem.eql(u8, arg, "--db")) {
             args.db_path = iter.next() orelse "sroolify.db";
         } else if (std.mem.eql(u8, arg, "--agent-binary")) {
-            args.agent_binary = iter.next() orelse "zig-out/bin/sroolify-agent";
+            args.agent_binary = iter.next() orelse "zig-out/bin/stardust-spider";
         } else if (std.mem.eql(u8, arg, "--server-url")) {
             args.server_url = iter.next() orelse "ws://localhost:8080/ws";
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
