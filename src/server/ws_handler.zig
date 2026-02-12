@@ -28,19 +28,38 @@ pub const WsState = struct {
     }
 
     pub fn deinit(self: *WsState) void {
+        var it = self.valid_tokens.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
         self.valid_tokens.deinit();
     }
 
     pub fn addToken(self: *WsState, agent_id: []const u8, token: []const u8) !void {
         self.mu.lock();
         defer self.mu.unlock();
-        try self.valid_tokens.put(agent_id, token);
+
+        // Free old value if key already exists
+        if (self.valid_tokens.fetchRemove(agent_id)) |old| {
+            self.allocator.free(old.key);
+            self.allocator.free(old.value);
+        }
+
+        const key = try self.allocator.dupe(u8, agent_id);
+        errdefer self.allocator.free(key);
+        const val = try self.allocator.dupe(u8, token);
+        errdefer self.allocator.free(val);
+        try self.valid_tokens.put(key, val);
     }
 
     pub fn removeToken(self: *WsState, agent_id: []const u8) void {
         self.mu.lock();
         defer self.mu.unlock();
-        _ = self.valid_tokens.remove(agent_id);
+        if (self.valid_tokens.fetchRemove(agent_id)) |old| {
+            self.allocator.free(old.key);
+            self.allocator.free(old.value);
+        }
     }
 
     pub fn validateToken(self: *WsState, agent_id: []const u8, token: []const u8) bool {
