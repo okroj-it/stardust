@@ -93,6 +93,14 @@ pub const Db = struct {
             \\)
         );
 
+        try conn.execNoArgs(
+            \\CREATE TABLE IF NOT EXISTS node_tags (
+            \\    node_id TEXT NOT NULL,
+            \\    tag     TEXT NOT NULL,
+            \\    UNIQUE(node_id, tag)
+            \\)
+        );
+
         // Migration: add sudo columns if missing (for existing DBs)
         conn.execNoArgs("ALTER TABLE nodes ADD COLUMN sudo_pass_enc BLOB") catch {};
         conn.execNoArgs("ALTER TABLE nodes ADD COLUMN sudo_pass_nonce BLOB") catch {};
@@ -300,8 +308,9 @@ pub const Db = struct {
         , .{id});
     }
 
-    /// Delete a node.
+    /// Delete a node and its tags.
     pub fn deleteNode(self: *Db, id: []const u8) !void {
+        try self.conn.exec("DELETE FROM node_tags WHERE node_id = ?1", .{id});
         try self.conn.exec("DELETE FROM nodes WHERE id = ?1", .{id});
     }
 
@@ -380,5 +389,49 @@ pub const Db = struct {
             "UPDATE users SET password = ?1 WHERE username = ?2",
             .{ password_hash, username },
         );
+    }
+
+    // --- Node Tags ---
+
+    /// Get all tags for a node. Caller must free each string and the slice.
+    pub fn getNodeTags(self: *Db, allocator: std.mem.Allocator, node_id: []const u8) ![][]const u8 {
+        var rows = try self.conn.rows(
+            "SELECT tag FROM node_tags WHERE node_id = ?1 ORDER BY tag",
+            .{node_id},
+        );
+        defer rows.deinit();
+
+        var result: std.ArrayListUnmanaged([]const u8) = .{};
+        while (rows.next()) |row| {
+            try result.append(allocator, try allocator.dupe(u8, row.text(0)));
+        }
+        return try result.toOwnedSlice(allocator);
+    }
+
+    /// Replace all tags for a node.
+    pub fn setNodeTags(self: *Db, node_id: []const u8, tags: []const []const u8) !void {
+        try self.conn.exec("DELETE FROM node_tags WHERE node_id = ?1", .{node_id});
+        for (tags) |tag| {
+            if (tag.len == 0) continue;
+            try self.conn.exec(
+                "INSERT OR IGNORE INTO node_tags (node_id, tag) VALUES (?1, ?2)",
+                .{ node_id, tag },
+            );
+        }
+    }
+
+    /// Get all unique tags across all nodes. Caller must free each string and the slice.
+    pub fn getAllTags(self: *Db, allocator: std.mem.Allocator) ![][]const u8 {
+        var rows = try self.conn.rows(
+            "SELECT DISTINCT tag FROM node_tags ORDER BY tag",
+            .{},
+        );
+        defer rows.deinit();
+
+        var result: std.ArrayListUnmanaged([]const u8) = .{};
+        while (rows.next()) |row| {
+            try result.append(allocator, try allocator.dupe(u8, row.text(0)));
+        }
+        return try result.toOwnedSlice(allocator);
     }
 };

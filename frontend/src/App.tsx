@@ -9,7 +9,7 @@ import { AnsibleModal } from "@/components/ansible-modal"
 import { FleetCommandModal } from "@/components/fleet-command-modal"
 import { LoginPage } from "@/components/login-page"
 import { isTokenValid, clearToken } from "@/lib/auth"
-import { fetchCapabilities } from "@/lib/api"
+import { fetchCapabilities, fetchAllTags } from "@/lib/api"
 import type { Capabilities } from "@/lib/api"
 import {
   Server,
@@ -18,6 +18,7 @@ import {
   Zap,
   UserCircle,
   Terminal,
+  Tag,
 } from "lucide-react"
 
 function App() {
@@ -50,12 +51,32 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
   const [showAnsible, setShowAnsible] = useState(false)
   const [showFleet, setShowFleet] = useState(false)
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null)
+  const [allTags, setAllTags] = useState<string[]>([])
+  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set())
+
+  const loadTags = useCallback(() => {
+    fetchAllTags().then(setAllTags).catch(() => {})
+  }, [])
 
   useEffect(() => {
     fetchCapabilities().then(setCapabilities).catch(() => {})
+    loadTags()
+  }, [loadTags])
+
+  const toggleTag = useCallback((tag: string) => {
+    setSelectedTags(prev => {
+      const next = new Set(prev)
+      if (next.has(tag)) next.delete(tag)
+      else next.add(tag)
+      return next
+    })
   }, [])
 
   const onlineCount = nodes.filter((n) => n.connected).length
+
+  const filteredNodes = selectedTags.size === 0
+    ? nodes
+    : nodes.filter(n => n.tags?.some(t => selectedTags.has(t)))
 
   return (
     <div className="min-h-screen relative overflow-hidden">
@@ -146,6 +167,39 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
           </div>
         </header>
 
+        {/* Tag Filter */}
+        {allTags.length > 0 && (
+          <div className="flex items-center gap-2 mb-6 flex-wrap">
+            <Tag className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+            {allTags.map(tag => {
+              const active = selectedTags.has(tag)
+              const count = nodes.filter(n => n.tags?.includes(tag)).length
+              return (
+                <button
+                  key={tag}
+                  onClick={() => toggleTag(tag)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-all border ${
+                    active
+                      ? 'bg-primary/15 border-primary/40 text-primary shadow-sm shadow-primary/10'
+                      : 'bg-card/50 border-border/50 text-muted-foreground hover:border-primary/30 hover:text-foreground'
+                  }`}
+                >
+                  {tag}
+                  <span className={`text-[10px] ${active ? 'text-primary/60' : 'text-muted-foreground/50'}`}>{count}</span>
+                </button>
+              )
+            })}
+            {selectedTags.size > 0 && (
+              <button
+                onClick={() => setSelectedTags(new Set())}
+                className="text-[10px] text-muted-foreground hover:text-foreground transition-colors ml-1"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Main Content */}
         <div className="flex gap-6">
           {/* Node Grid */}
@@ -161,7 +215,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
                 ? "flex flex-col gap-3"
                 : "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
               }>
-                {nodes.map((node) => (
+                {filteredNodes.map((node) => (
                   <NodeCard
                     key={node.agent_id}
                     node={node}
@@ -182,6 +236,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
                 node={nodes.find(n => n.agent_id === selectedNode)!}
                 onClose={() => setSelectedNode(null)}
                 onRemove={() => setRemoveNode(selectedNode)}
+                onTagsChanged={() => { refresh(); loadTags() }}
                 capabilities={capabilities}
               />
             </div>

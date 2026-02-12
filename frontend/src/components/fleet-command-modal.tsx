@@ -34,6 +34,7 @@ export function FleetCommandModal({ nodes, onClose }: FleetCommandModalProps) {
   const [selectedNodes, setSelectedNodes] = useState<Set<string>>(
     new Set(nodes.filter(n => n.connected).map(n => n.agent_id))
   )
+  const [activeTags, setActiveTags] = useState<Set<string>>(new Set())
   const [nodeOutputs, setNodeOutputs] = useState<Record<string, FleetNodeResult>>({})
   const [error, setError] = useState<string | null>(null)
   const [showHistory, setShowHistory] = useState(false)
@@ -140,8 +141,10 @@ export function FleetCommandModal({ nodes, onClose }: FleetCommandModalProps) {
   const toggleAll = () => {
     if (selectedNodes.size === connectedNodes.length) {
       setSelectedNodes(new Set())
+      setActiveTags(new Set())
     } else {
       setSelectedNodes(new Set(connectedNodes.map(n => n.agent_id)))
+      setActiveTags(new Set())
     }
   }
 
@@ -247,6 +250,55 @@ export function FleetCommandModal({ nodes, onClose }: FleetCommandModalProps) {
                     {selectedNodes.size === connectedNodes.length ? 'Deselect all' : 'Select all'}
                   </button>
                 </div>
+                {/* Tag quick-select */}
+                {(() => {
+                  const tagSet = new Set<string>()
+                  for (const n of connectedNodes) for (const t of n.tags ?? []) tagSet.add(t)
+                  const tags = [...tagSet].sort()
+                  if (tags.length === 0) return null
+                  return (
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {tags.map(tag => {
+                        const tagNodes = connectedNodes.filter(n => n.tags?.includes(tag))
+                        const active = activeTags.has(tag)
+                        return (
+                          <button
+                            key={tag}
+                            onClick={() => {
+                              const nextTags = new Set(activeTags)
+                              if (active) {
+                                nextTags.delete(tag)
+                                setActiveTags(nextTags)
+                                // Deselect nodes with this tag
+                                setSelectedNodes(prev => {
+                                  const next = new Set(prev)
+                                  for (const n of tagNodes) next.delete(n.agent_id)
+                                  return next
+                                })
+                              } else {
+                                nextTags.add(tag)
+                                setActiveTags(nextTags)
+                                // Select nodes matching any active tag, deselect those that don't
+                                const next = new Set<string>()
+                                for (const n of connectedNodes) {
+                                  if (n.tags?.some(t => nextTags.has(t))) next.add(n.agent_id)
+                                }
+                                setSelectedNodes(next)
+                              }
+                            }}
+                            className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors border ${
+                              active
+                                ? 'bg-amber-400/15 border-amber-400/30 text-amber-300'
+                                : 'bg-[#161b22] border-border/20 text-[#484f58] hover:text-[#8b949e]'
+                            }`}
+                          >
+                            {tag} ({tagNodes.length})
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )
+                })()}
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
                   {connectedNodes.map(node => (
                     <button

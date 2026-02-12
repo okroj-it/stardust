@@ -11,6 +11,7 @@ import {
   Wifi,
   Clock,
   Activity,
+  Tag,
 } from "lucide-react"
 
 interface NodeCardProps {
@@ -80,6 +81,21 @@ export function NodeCard({ node, onClick, selected }: NodeCardProps) {
             </span>
           </div>
         </div>
+
+        {/* Tags */}
+        {node.tags && node.tags.length > 0 && (
+          <div className="flex items-center gap-1 flex-wrap">
+            <Tag className="w-3 h-3 text-muted-foreground shrink-0" />
+            {node.tags.slice(0, 3).map(tag => (
+              <span key={tag} className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-primary/10 text-primary/80 border border-primary/20">
+                {tag}
+              </span>
+            ))}
+            {node.tags.length > 3 && (
+              <span className="text-[10px] text-muted-foreground">+{node.tags.length - 3}</span>
+            )}
+          </div>
+        )}
 
         {stats && (
           <>

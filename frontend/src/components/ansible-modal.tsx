@@ -45,6 +45,7 @@ export function AnsibleModal({ nodes, ansibleVersion, onClose }: AnsibleModalPro
   const [selectedNodes, setSelectedNodes] = useState<Set<string>>(
     new Set(nodes.filter(n => n.connected).map(n => n.agent_id))
   )
+  const [activeTags, setActiveTags] = useState<Set<string>>(new Set())
   const [output, setOutput] = useState("")
   const [error, setError] = useState<string | null>(null)
   const outputRef = useRef<HTMLPreElement>(null)
@@ -134,8 +135,10 @@ export function AnsibleModal({ nodes, ansibleVersion, onClose }: AnsibleModalPro
   const toggleAll = () => {
     if (selectedNodes.size === nodes.length) {
       setSelectedNodes(new Set())
+      setActiveTags(new Set())
     } else {
       setSelectedNodes(new Set(nodes.map(n => n.agent_id)))
+      setActiveTags(new Set())
     }
   }
 
@@ -185,6 +188,55 @@ export function AnsibleModal({ nodes, ansibleVersion, onClose }: AnsibleModalPro
                     {selectedNodes.size === nodes.length ? 'Deselect All' : 'Select All'}
                   </button>
                 </div>
+                {/* Tag quick-select */}
+                {(() => {
+                  const tagSet = new Set<string>()
+                  for (const n of nodes) for (const t of n.tags ?? []) tagSet.add(t)
+                  const tags = [...tagSet].sort()
+                  if (tags.length === 0) return null
+                  return (
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {tags.map(tag => {
+                        const tagNodes = nodes.filter(n => n.tags?.includes(tag))
+                        const active = activeTags.has(tag)
+                        return (
+                          <button
+                            key={tag}
+                            onClick={() => {
+                              const nextTags = new Set(activeTags)
+                              if (active) {
+                                nextTags.delete(tag)
+                                setActiveTags(nextTags)
+                                // Deselect nodes with this tag
+                                setSelectedNodes(prev => {
+                                  const next = new Set(prev)
+                                  for (const n of tagNodes) next.delete(n.agent_id)
+                                  return next
+                                })
+                              } else {
+                                nextTags.add(tag)
+                                setActiveTags(nextTags)
+                                // Select nodes matching any active tag, deselect those that don't
+                                const next = new Set<string>()
+                                for (const n of nodes) {
+                                  if (n.tags?.some(t => nextTags.has(t))) next.add(n.agent_id)
+                                }
+                                setSelectedNodes(next)
+                              }
+                            }}
+                            className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors border ${
+                              active
+                                ? 'bg-[#58a6ff]/15 border-[#58a6ff]/30 text-[#58a6ff]'
+                                : 'bg-[#161b22] border-border/30 text-[#484f58] hover:text-[#8b949e]'
+                            }`}
+                          >
+                            {tag} ({tagNodes.length})
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )
+                })()}
                 <div className="flex flex-wrap gap-1.5">
                   {nodes.map(node => (
                     <button

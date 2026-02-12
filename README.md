@@ -7,7 +7,7 @@
 <p align="center">
   <em>A lightweight server monitoring & orchestration platform built in Zig.<br/>
   Deploy zero-dependency agents to your Linux fleet, collect real-time telemetry over WebSockets,<br/>
-  open interactive SSH terminals, run fleet-wide commands, manage packages and systemd services, and execute Ansible playbooks — all from a single binary and a clean React dashboard.</em>
+  tag and group nodes, open interactive SSH terminals, run fleet-wide commands, manage packages and systemd services, and execute Ansible playbooks — all from a single binary and a clean React dashboard.</em>
 </p>
 
 <p align="center">
@@ -127,7 +127,7 @@ Spiders auto-detect and report: **OS** (name, version, ID), **kernel**, **archit
 ### Fleet Command (Starman)
 
 - **Parallel execution** — Run any shell command across multiple nodes simultaneously with per-node streaming output
-- **Node targeting** — Select individual nodes or the entire connected fleet from a checkbox grid
+- **Node targeting** — Select individual nodes, the entire fleet, or groups by tag from a checkbox grid
 - **Sudo support** — Toggle sudo mode; per-node sudo passwords are decrypted from the database automatically
 - **Live streaming** — Output streams in real time via single-request polling (one poll returns all nodes)
 - **Per-node panels** — Collapsible output sections with status indicators (running/success/error) per node
@@ -152,7 +152,7 @@ Spiders auto-detect and report: **OS** (name, version, ID), **kernel**, **archit
 - **Dynamic inventory** — Generated on-the-fly from your node database with decrypted SSH credentials
 - **Playbook editor** — Write YAML directly in The Capsule with syntax-highlighted textarea
 - **Requirements.yml** — Install Galaxy roles and collections before playbook runs
-- **Node targeting** — Select specific nodes or run against the entire fleet
+- **Node targeting** — Select specific nodes, groups by tag, or run against the entire fleet
 - **Streaming output** — Watch `ansible-playbook` output in real time via polling
 - **Secure cleanup** — All temp files (inventory, keys, playbooks, requirements) deleted after runs; passwords zeroed in memory
 
@@ -163,6 +163,14 @@ Spiders auto-detect and report: **OS** (name, version, ID), **kernel**, **archit
 - **API protection** — All management endpoints require valid bearer tokens
 - **Credential encryption** — AES-GCM-256 for SSH keys and sudo passwords at rest
 - **Secure memory** — `std.crypto.secureZero` on all decrypted secrets after use
+
+### Node Groups & Tags
+
+- **Tag any node** — Add free-form labels like `prod`, `staging`, `frontend`, `eu-west` from the node detail panel
+- **Dashboard filtering** — Click tag pills to filter the node grid (OR logic — shows nodes matching any selected tag)
+- **Tag-based targeting** — Fleet Command and Ansible modals let you select/deselect nodes by tag in one click
+- **Autocomplete** — Tag input suggests existing tags from across your fleet
+- **Clean lifecycle** — Tags are automatically removed when a node is deleted
 
 ### Dashboard (The Capsule)
 
@@ -377,11 +385,12 @@ All endpoints (except health and login) require `Authorization: Bearer <token>`.
 | `GET` | `/api/nodes` | List all nodes with live status |
 | `POST` | `/api/nodes` | Add a new node |
 | `GET` | `/api/nodes/:id` | Get node details |
-| `PATCH` | `/api/nodes/:id` | Update node (credentials) |
+| `PATCH` | `/api/nodes/:id` | Update node (credentials, tags) |
 | `DELETE` | `/api/nodes/:id` | Delete node from database |
 | `GET` | `/api/nodes/:id/stats` | Latest telemetry snapshot |
 | `GET` | `/api/nodes/:id/stats/history?count=N` | Historical snapshots |
 | `POST` | `/api/nodes/check` | Pre-deployment SSH connectivity test |
+| `GET` | `/api/tags` | List all unique tags across all nodes |
 
 ### Deployment (Major Tom)
 

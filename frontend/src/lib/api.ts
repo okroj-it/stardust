@@ -98,6 +98,7 @@ export interface NodeStatus {
   cpu_cores?: number | null
   total_ram?: number | null
   pkg_manager?: string | null
+  tags?: string[]
 }
 
 const BASE = ''
@@ -199,6 +200,24 @@ export async function addNode(payload: AddNodePayload): Promise<AddNodeResponse>
 
 export async function deleteNode(nodeId: string): Promise<void> {
   await apiFetch(`${BASE}/api/nodes/${nodeId}`, { method: 'DELETE' })
+}
+
+export async function updateNodeTags(nodeId: string, tags: string[]): Promise<void> {
+  const res = await apiFetch(`${BASE}/api/nodes/${nodeId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tags }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+}
+
+export async function fetchAllTags(): Promise<string[]> {
+  const res = await apiFetch(`${BASE}/api/tags`)
+  if (!res.ok) return []
+  return res.json()
 }
 
 export interface CheckNodePayload {

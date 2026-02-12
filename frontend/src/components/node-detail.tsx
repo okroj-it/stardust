@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, useEffect, useRef } from "react"
 import { cn, formatBytes, formatUptime } from "@/lib/utils"
 import { useNodeStats } from "@/hooks/use-stats"
 import { StatRing } from "./stat-ring"
@@ -8,7 +8,7 @@ import { TerminalModal } from "./terminal-modal"
 import { WebTerminal } from "./web-terminal"
 import { ServiceManager } from "./service-manager"
 import type { NodeStatus, Capabilities } from "@/lib/api"
-import { deployStep } from "@/lib/api"
+import { deployStep, updateNodeTags, fetchAllTags } from "@/lib/api"
 import {
   X,
   Cpu,
@@ -28,16 +28,18 @@ import {
   RotateCw,
   SquareTerminal,
   Cog,
+  Tag,
 } from "lucide-react"
 
 interface NodeDetailProps {
   node: NodeStatus
   onClose: () => void
   onRemove: () => void
+  onTagsChanged?: () => void
   capabilities?: Capabilities | null
 }
 
-export function NodeDetail({ node, onClose, onRemove, capabilities }: NodeDetailProps) {
+export function NodeDetail({ node, onClose, onRemove, onTagsChanged, capabilities }: NodeDetailProps) {
   const nodeId = node.agent_id
   const { stats, history } = useNodeStats(nodeId, 5000)
   const [showTerminal, setShowTerminal] = useState(false)
@@ -146,6 +148,13 @@ export function NodeDetail({ node, onClose, onRemove, capabilities }: NodeDetail
           </div>
         </div>
       )}
+
+      {/* Tags */}
+      <TagEditor
+        nodeId={nodeId}
+        tags={node.tags ?? []}
+        onChanged={onTagsChanged}
+      />
 
       {/* Overview Rings */}
       <div className="grid grid-cols-3 gap-6 p-6 rounded-xl border border-border/50 bg-card/30 backdrop-blur-sm">
@@ -471,6 +480,99 @@ function InfoRow({
         {label}
       </span>
       <span className="text-xs font-mono text-foreground">{value}</span>
+    </div>
+  )
+}
+
+function TagEditor({ nodeId, tags, onChanged }: { nodeId: string; tags: string[]; onChanged?: () => void }) {
+  const [localTags, setLocalTags] = useState<string[]>(tags)
+  const [input, setInput] = useState("")
+  const [suggestions, setSuggestions] = useState<string[]>([])
+  const [allTags, setAllTags] = useState<string[]>([])
+  const [showSuggestions, setShowSuggestions] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => { setLocalTags(tags) }, [tags.join(',')])
+
+  useEffect(() => {
+    fetchAllTags().then(setAllTags).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    if (input.trim()) {
+      const lower = input.toLowerCase()
+      setSuggestions(allTags.filter(t => t.toLowerCase().includes(lower) && !localTags.includes(t)).slice(0, 5))
+    } else {
+      setSuggestions([])
+    }
+  }, [input, allTags, localTags])
+
+  const save = async (newTags: string[]) => {
+    setLocalTags(newTags)
+    try {
+      await updateNodeTags(nodeId, newTags)
+      onChanged?.()
+    } catch {}
+  }
+
+  const addTag = (tag: string) => {
+    const t = tag.trim().toLowerCase()
+    if (t && !localTags.includes(t)) {
+      save([...localTags, t])
+    }
+    setInput("")
+    setShowSuggestions(false)
+  }
+
+  const removeTag = (tag: string) => {
+    save(localTags.filter(t => t !== tag))
+  }
+
+  return (
+    <div className="p-4 rounded-xl border border-border/50 bg-card/30 backdrop-blur-sm">
+      <div className="flex items-center gap-2 mb-3 text-muted-foreground">
+        <Tag className="w-4 h-4" />
+        <span className="text-sm font-semibold text-foreground">Tags</span>
+      </div>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {localTags.map(tag => (
+          <span key={tag} className="flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-primary/10 text-primary border border-primary/20 group">
+            {tag}
+            <button onClick={() => removeTag(tag)} className="text-primary/40 hover:text-red-400 transition-colors">
+              <X className="w-3 h-3" />
+            </button>
+          </span>
+        ))}
+        <div className="relative">
+          <input
+            ref={inputRef}
+            type="text"
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && input.trim()) { addTag(input); e.preventDefault() }
+              if (e.key === 'Backspace' && !input && localTags.length > 0) removeTag(localTags[localTags.length - 1])
+            }}
+            onFocus={() => setShowSuggestions(true)}
+            onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+            placeholder={localTags.length === 0 ? "Add tags..." : "+"}
+            className="w-24 px-2 py-0.5 rounded-md text-xs bg-transparent border border-border/30 text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-primary/40"
+          />
+          {showSuggestions && suggestions.length > 0 && (
+            <div className="absolute top-full left-0 mt-1 w-40 rounded-lg bg-card border border-border/50 shadow-lg z-10 overflow-hidden">
+              {suggestions.map(s => (
+                <button
+                  key={s}
+                  onMouseDown={() => addTag(s)}
+                  className="w-full px-3 py-1.5 text-left text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

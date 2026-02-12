@@ -122,6 +122,8 @@ pub const Api = struct {
             try self.handleCapabilities(r);
         } else if (std.mem.eql(u8, path, "/api/auth/password")) {
             try self.handleChangePassword(r);
+        } else if (std.mem.eql(u8, path, "/api/tags")) {
+            try self.handleTags(r);
         } else if (std.mem.eql(u8, path, "/api/nodes/check")) {
             try self.handleNodeCheck(r);
         } else if (std.mem.eql(u8, path, "/api/nodes")) {
@@ -372,7 +374,27 @@ pub const Api = struct {
             for (db_nodes) |node| node.deinit(self.allocator);
             if (db_nodes.len > 0) self.allocator.free(db_nodes);
         }
+        // Collect tags that need freeing after response is sent
+        var tag_allocs: std.ArrayListUnmanaged([][]const u8) = .{};
+        defer {
+            for (tag_allocs.items) |tags| {
+                for (tags) |t| self.allocator.free(t);
+                self.allocator.free(tags);
+            }
+            tag_allocs.deinit(self.allocator);
+        }
+
         for (db_nodes) |node| {
+            const tags: ?[][]const u8 = if (self.db) |db| blk: {
+                const t = db.getNodeTags(self.allocator, node.id) catch break :blk null;
+                tag_allocs.append(self.allocator, t) catch {
+                    for (t) |s| self.allocator.free(s);
+                    self.allocator.free(t);
+                    break :blk null;
+                };
+                break :blk t;
+            } else null;
+
             db_lookup.put(node.id, .{
                 .name = node.name,
                 .host = node.host,
@@ -386,6 +408,7 @@ pub const Api = struct {
                 .cpu_cores = node.cpu_cores,
                 .total_ram = node.total_ram,
                 .pkg_manager = node.pkg_manager,
+                .tags = tags,
             }) catch {};
         }
 
@@ -428,6 +451,7 @@ pub const Api = struct {
         cpu_cores: ?i64,
         total_ram: ?i64,
         pkg_manager: ?[]const u8,
+        tags: ?[][]const u8 = null,
     };
 
     fn formatNodeJson(self: *Api, agent_id: []const u8, meta: ?NodeMeta, connected: bool, last_seen: i64, snapshot_count: usize) ![]u8 {
@@ -455,6 +479,20 @@ pub const Api = struct {
         } else {
             try w.writeAll(",\"os_id\":null,\"os_version\":null,\"os_name\":null,\"arch\":null,\"kernel\":null,\"cpu_model\":null,\"cpu_cores\":null,\"total_ram\":null,\"pkg_manager\":null");
         }
+
+        // Tags
+        try w.writeAll(",\"tags\":[");
+        if (meta) |m| {
+            if (m.tags) |tags| {
+                for (tags, 0..) |tag, i| {
+                    if (i > 0) try w.writeByte(',');
+                    try w.writeByte('"');
+                    try w.writeAll(tag);
+                    try w.writeByte('"');
+                }
+            }
+        }
+        try w.writeByte(']');
 
         try w.writeAll("}");
         return try json_buf.toOwnedSlice(self.allocator);
@@ -633,6 +671,15 @@ pub const Api = struct {
             db.updateSshKey(node_id, enc.ciphertext, &enc.nonce, &enc.tag) catch {
                 r.setStatus(.internal_server_error);
                 try r.sendJson("{\"error\":\"database update failed\"}");
+                return;
+            };
+        }
+
+        // Update tags if provided
+        if (req.tags) |tags| {
+            db.setNodeTags(node_id, tags) catch {
+                r.setStatus(.internal_server_error);
+                try r.sendJson("{\"error\":\"tag update failed\"}");
                 return;
             };
         }
@@ -964,6 +1011,42 @@ pub const Api = struct {
         };
         defer self.allocator.free(resp);
         try r.sendJson(resp);
+    }
+
+    // --- Tags ---
+
+    fn handleTags(self: *Api, r: zap.Request) !void {
+        if (r.methodAsEnum() != .GET) {
+            r.setStatus(.method_not_allowed);
+            try r.sendJson("{\"error\":\"method not allowed\"}");
+            return;
+        }
+        const db = self.db orelse {
+            try r.sendJson("[]");
+            return;
+        };
+        const tags = db.getAllTags(self.allocator) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"failed to fetch tags\"}");
+            return;
+        };
+        defer {
+            for (tags) |t| self.allocator.free(t);
+            self.allocator.free(tags);
+        }
+
+        var buf: std.ArrayListUnmanaged(u8) = .{};
+        defer buf.deinit(self.allocator);
+        const w = buf.writer(self.allocator);
+        try w.writeByte('[');
+        for (tags, 0..) |tag, i| {
+            if (i > 0) try w.writeByte(',');
+            try w.writeByte('"');
+            try w.writeAll(tag);
+            try w.writeByte('"');
+        }
+        try w.writeByte(']');
+        try r.sendJson(buf.items);
     }
 
     // --- Ansible ---
@@ -1433,6 +1516,7 @@ const CheckNodeRequest = struct {
 const UpdateNodeRequest = struct {
     sudo_password: ?[]const u8 = null,
     ssh_key: ?[]const u8 = null,
+    tags: ?[]const []const u8 = null,
 };
 
 const LoginRequest = struct {
