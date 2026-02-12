@@ -7,6 +7,7 @@ import { MiniChart } from "./mini-chart"
 import { TerminalModal } from "./terminal-modal"
 import { WebTerminal } from "./web-terminal"
 import { ServiceManager } from "./service-manager"
+import { ProcessExplorer } from "./process-explorer"
 import type { NodeStatus, Capabilities } from "@/lib/api"
 import { deployStep, updateNodeTags, fetchAllTags } from "@/lib/api"
 import {
@@ -46,6 +47,7 @@ export function NodeDetail({ node, onClose, onRemove, onTagsChanged, capabilitie
   const [showShell, setShowShell] = useState(false)
   const [showReinstall, setShowReinstall] = useState(false)
   const [showServices, setShowServices] = useState(false)
+  const [showProcesses, setShowProcesses] = useState(false)
 
   const cpuHistory = history.map((h) => h.cpu.usage_percent)
   const memHistory = history.map((h) => h.memory.used_percent)
@@ -83,6 +85,15 @@ export function NodeDetail({ node, onClose, onRemove, onTagsChanged, capabilitie
           <p className="text-sm text-muted-foreground font-mono">{nodeId}</p>
         </div>
         <div className="flex items-center gap-1">
+          {capabilities?.processes && node.connected && (
+            <button
+              onClick={() => setShowProcesses(true)}
+              className="p-2 rounded-lg hover:bg-cyan-500/10 text-muted-foreground hover:text-cyan-400 transition-colors"
+              title="Processes"
+            >
+              <Activity className="w-4 h-4" />
+            </button>
+          )}
           {capabilities?.services && node.connected && (
             <button
               onClick={() => setShowServices(true)}
@@ -302,6 +313,14 @@ export function NodeDetail({ node, onClose, onRemove, onTagsChanged, capabilitie
           </InfoCard>
         )}
       </div>
+
+      {showProcesses && (
+        <ProcessExplorer
+          nodeId={nodeId}
+          nodeName={node.name}
+          onClose={() => setShowProcesses(false)}
+        />
+      )}
 
       {showServices && (
         <ServiceManager

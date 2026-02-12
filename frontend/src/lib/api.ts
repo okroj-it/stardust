@@ -347,12 +347,13 @@ export interface Capabilities {
   ansible_version?: string | null
   fleet: boolean
   services: boolean
+  processes: boolean
   drift: boolean
 }
 
 export async function fetchCapabilities(): Promise<Capabilities> {
   const res = await apiFetch(`${BASE}/api/capabilities`)
-  if (!res.ok) return { deployer: false, auth: false, ansible: false, fleet: false, services: false, drift: false }
+  if (!res.ok) return { deployer: false, auth: false, ansible: false, fleet: false, services: false, processes: false, drift: false }
   return res.json()
 }
 
@@ -648,4 +649,68 @@ export async function driftDeleteSnapshot(id: number): Promise<void> {
     const err = await res.json().catch(() => ({ error: 'Request failed' }))
     throw new Error(err.error || `HTTP ${res.status}`)
   }
+}
+
+// --- Process Explorer ---
+
+export interface ProcessInfo {
+  user: string
+  pid: number
+  cpu: number
+  mem: number
+  vsz: number
+  rss: number
+  tty: string
+  stat: string
+  start: string
+  time: string
+  command: string
+}
+
+export async function fetchProcessList(nodeId: string): Promise<ServiceResult> {
+  const res = await apiFetch(`${BASE}/api/processes/${nodeId}/list`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function killProcess(nodeId: string, pid: number, signal: number): Promise<ServiceResult> {
+  const res = await apiFetch(`${BASE}/api/processes/${nodeId}/kill`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pid, signal }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export function parseProcessList(output: string): ProcessInfo[] {
+  const processes: ProcessInfo[] = []
+  for (const line of output.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    // ps aux --no-headers: USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND...
+    const parts = trimmed.split(/\s+/)
+    if (parts.length >= 11) {
+      processes.push({
+        user: parts[0],
+        pid: parseInt(parts[1], 10),
+        cpu: parseFloat(parts[2]),
+        mem: parseFloat(parts[3]),
+        vsz: parseInt(parts[4], 10),
+        rss: parseInt(parts[5], 10),
+        tty: parts[6],
+        stat: parts[7],
+        start: parts[8],
+        time: parts[9],
+        command: parts.slice(10).join(' '),
+      })
+    }
+  }
+  return processes
 }

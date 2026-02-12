@@ -12,6 +12,8 @@ const FleetEngine = @import("fleet.zig").FleetEngine;
 const service_mod = @import("services.zig");
 const ServiceEngine = service_mod.ServiceEngine;
 const ServiceScope = service_mod.ServiceScope;
+const process_mod = @import("processes.zig");
+const ProcessEngine = process_mod.ProcessEngine;
 const DriftEngine = @import("drift.zig").DriftEngine;
 const common = @import("common");
 
@@ -26,6 +28,7 @@ pub const Api = struct {
     ansible: ?*AnsibleEngine = null,
     fleet: ?*FleetEngine = null,
     services: ?*ServiceEngine = null,
+    processes: ?*ProcessEngine = null,
     drift: ?*DriftEngine = null,
 
     pub fn init(allocator: std.mem.Allocator, store: *Store) Api {
@@ -69,6 +72,10 @@ pub const Api = struct {
 
     pub fn setServices(self: *Api, s: *ServiceEngine) void {
         self.services = s;
+    }
+
+    pub fn setProcesses(self: *Api, p: *ProcessEngine) void {
+        self.processes = p;
     }
 
     pub fn setDrift(self: *Api, d: *DriftEngine) void {
@@ -147,6 +154,8 @@ pub const Api = struct {
             try self.handleFleet(r, path);
         } else if (std.mem.startsWith(u8, path, "/api/services/")) {
             try self.handleServices(r, path);
+        } else if (std.mem.startsWith(u8, path, "/api/processes/")) {
+            try self.handleProcesses(r, path);
         } else if (std.mem.startsWith(u8, path, "/api/drift/")) {
             try self.handleDrift(r, path);
         } else {
@@ -1213,7 +1222,7 @@ pub const Api = struct {
         defer if (ansible_ver != null) self.allocator.free(ver_json);
 
         const resp = std.fmt.allocPrint(self.allocator,
-            \\{{"deployer":{s},"auth":{s},"ansible":{s},"ansible_version":{s},"fleet":{s},"services":{s},"drift":{s}}}
+            \\{{"deployer":{s},"auth":{s},"ansible":{s},"ansible_version":{s},"fleet":{s},"services":{s},"processes":{s},"drift":{s}}}
         , .{
             if (self.deployer != null) "true" else "false",
             if (self.auth != null) "true" else "false",
@@ -1221,6 +1230,7 @@ pub const Api = struct {
             ver_json,
             if (self.fleet != null) "true" else "false",
             if (self.services != null) "true" else "false",
+            if (self.processes != null) "true" else "false",
             if (self.drift != null) "true" else "false",
         }) catch {
             r.setStatus(.internal_server_error);
@@ -1684,6 +1694,111 @@ pub const Api = struct {
 
         const scope = ServiceScope.fromString(req.scope);
         const result = engine.serviceAction(node_id, req.name, req.action, scope);
+        defer if (result.output.len > 0) self.allocator.free(result.output);
+
+        const escaped = jsonEscape(self.allocator, result.output) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(escaped);
+
+        const resp = std.fmt.allocPrint(self.allocator,
+            \\{{"ok":{s},"output":"{s}"}}
+        , .{
+            if (result.ok) "true" else "false",
+            escaped,
+        }) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(resp);
+        try r.sendJson(resp);
+    }
+
+    // --- Process Explorer ---
+
+    fn handleProcesses(self: *Api, r: zap.Request, path: []const u8) !void {
+        const engine = self.processes orelse {
+            r.setStatus(.service_unavailable);
+            try r.sendJson("{\"error\":\"process explorer not available\"}");
+            return;
+        };
+
+        // Path: /api/processes/<node_id>/<action>
+        const after = path["/api/processes/".len..];
+        const slash_pos = std.mem.indexOf(u8, after, "/");
+        if (slash_pos == null) {
+            r.setStatus(.not_found);
+            try r.sendJson("{\"error\":\"missing sub-path\"}");
+            return;
+        }
+        const node_id = after[0..slash_pos.?];
+        const rest = after[slash_pos.?..];
+
+        if (std.mem.eql(u8, rest, "/list")) {
+            try self.handleProcessList(r, engine, node_id);
+        } else if (std.mem.eql(u8, rest, "/kill")) {
+            try self.handleProcessKill(r, engine, node_id);
+        } else {
+            r.setStatus(.not_found);
+            try r.sendJson("{\"error\":\"not found\"}");
+        }
+    }
+
+    fn handleProcessList(self: *Api, r: zap.Request, engine: *ProcessEngine, node_id: []const u8) !void {
+        if (r.methodAsEnum() != .GET) {
+            r.setStatus(.method_not_allowed);
+            try r.sendJson("{\"error\":\"method not allowed\"}");
+            return;
+        }
+
+        const result = engine.listProcesses(node_id);
+        defer if (result.output.len > 0) self.allocator.free(result.output);
+
+        const escaped = jsonEscape(self.allocator, result.output) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(escaped);
+
+        const resp = std.fmt.allocPrint(self.allocator,
+            \\{{"ok":{s},"output":"{s}"}}
+        , .{
+            if (result.ok) "true" else "false",
+            escaped,
+        }) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(resp);
+        try r.sendJson(resp);
+    }
+
+    fn handleProcessKill(self: *Api, r: zap.Request, engine: *ProcessEngine, node_id: []const u8) !void {
+        if (r.methodAsEnum() != .POST) {
+            r.setStatus(.method_not_allowed);
+            try r.sendJson("{\"error\":\"method not allowed\"}");
+            return;
+        }
+
+        const body = r.body orelse {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"missing request body\"}");
+            return;
+        };
+        const parsed = std.json.parseFromSlice(ProcessKillRequest, self.allocator, body, .{ .ignore_unknown_fields = true }) catch {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"invalid JSON\"}");
+            return;
+        };
+        defer parsed.deinit();
+        const req = parsed.value;
+
+        const result = engine.killProcess(node_id, req.pid, req.signal);
         defer if (result.output.len > 0) self.allocator.free(result.output);
 
         const escaped = jsonEscape(self.allocator, result.output) catch {
@@ -2307,6 +2422,13 @@ const ServiceActionRequest = struct {
     name: []const u8,
     action: []const u8,
     scope: []const u8 = "system",
+};
+
+// --- Process Explorer ---
+
+const ProcessKillRequest = struct {
+    pid: u32,
+    signal: u8 = 15,
 };
 
 /// Escape a string for embedding inside a JSON string (between quotes).
