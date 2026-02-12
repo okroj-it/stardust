@@ -159,8 +159,8 @@ Binaries land in `zig-out/bin/`:
 
 | Binary | Size | Description |
 |:-------|:-----|:------------|
-| `stardust-server` | ~5 MB | Ground Control (server + embedded UI) |
-| `stardust-spider` | ~1 MB | Spider agent (zero dependencies, static) |
+| `stardust-server` | ~12 MB | Ground Control (server + embedded UI) |
+| `stardust-spider` | ~6.5 MB | Spider agent (zero dependencies, static) |
 
 ### Configuration
 
