@@ -15,6 +15,7 @@ const ProcessEngine = @import("processes.zig").ProcessEngine;
 const LogEngine = @import("logs.zig").LogEngine;
 const DriftEngine = @import("drift.zig").DriftEngine;
 const SecurityEngine = @import("security.zig").SecurityEngine;
+const ContainerEngine = @import("containers.zig").ContainerEngine;
 const terminal_handler = @import("terminal_handler.zig");
 const embedded_ui = @import("embedded_ui");
 
@@ -216,6 +217,15 @@ pub fn main() !void {
         }
     }
 
+    // Init container engine (requires crypto + db)
+    var containers: ?ContainerEngine = null;
+    if (crypto_engine) |*ce| {
+        if (db) |*d| {
+            containers = ContainerEngine.init(allocator, d, ce);
+            std.log.info("[SUFFRAGETTE CITY] Container engine: enabled", .{});
+        }
+    }
+
     // Init auth (requires crypto + db)
     var auth: ?Auth = null;
     if (crypto_engine) |ce| {
@@ -275,6 +285,7 @@ pub fn main() !void {
     if (logs) |*l| global_api.setLogs(l);
     if (drift) |*d| global_api.setDrift(d);
     if (security) |*s| global_api.setSecurity(s);
+    if (containers) |*c| global_api.setContainers(c);
     global_api.setWsState(&ws_state);
 
     // Init WebSocket settings

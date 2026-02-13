@@ -7,7 +7,7 @@
 <p align="center">
   <em>A lightweight server monitoring & orchestration platform built in Zig.<br/>
   Deploy zero-dependency agents to your Linux fleet, collect real-time telemetry over WebSockets,<br/>
-  tag and group nodes, open interactive SSH terminals, run fleet-wide commands, manage packages and systemd services, explore processes with kill signals, stream logs in real time, audit security posture with scoring, execute Ansible playbooks, detect configuration drift, track every action in an event timeline, and export Prometheus metrics — all from a single binary and a clean React dashboard.</em>
+  tag and group nodes, open interactive SSH terminals, run fleet-wide commands, manage packages and systemd services, explore processes with kill signals, stream logs in real time, manage Docker/Podman containers, audit security posture with scoring, execute Ansible playbooks, detect configuration drift, track every action in an event timeline, and export Prometheus metrics — all from a single binary and a clean React dashboard.</em>
 </p>
 
 <p align="center">
@@ -43,6 +43,7 @@ Every component draws from David Bowie's *Space Oddity* and *Ziggy Stardust* myt
 | Process Explorer | **Ashes to Ashes** | Browser-based process viewer with kill signals | *"Ashes to ashes, funk to funky"* |
 | Log Streaming | **Sound and Vision** | Real-time log tailing (journalctl & files) | *"Don't you wonder sometimes, 'bout sound and vision?"* |
 | Security Posture | **Heroes** | Per-node security audit with scoring | *"We can be heroes, just for one day"* |
+| Container Manager | **Suffragette City** | Docker/Podman container viewer and controller | *"Wham bam, thank you ma'am"* |
 | Event Timeline | **Changes** | Audit trail for every action and connection event | *"Ch-ch-ch-ch-Changes, turn and face the strange"* |
 | Ansible | **Ziggy** | Optional Ansible orchestration engine | *"Ziggy played guitar"* |
 
@@ -67,6 +68,7 @@ Every component draws from David Bowie's *Space Oddity* and *Ziggy Stardust* myt
                     │                  │──── SSH (Ashes) ───────►  │              │
                     │                  │──── SSH (Sound&Vision)─►  │              │
                     │                  │──── SSH (Heroes) ──────►  │              │
+                    │                  │──── SSH (Suffragette)──►  │              │
                     └────────┬─────────┘                             └─────────────┘
                              │
                     ┌────────▼─────────┐       ┌─────────────────┐
@@ -202,6 +204,17 @@ Spiders auto-detect and report: **OS** (name, version, ID), **kernel**, **archit
 - **Auto-refresh** — New events appear automatically via 10-second polling
 - **Auto-prune** — Events older than 30 days are cleaned up on server startup
 - **Fire-and-forget recording** — Event insertion never blocks or fails the primary action
+
+### Container Management (Suffragette City)
+
+- **Docker & Podman support** — Automatically detects Docker or Podman on each node via SSH; falls back gracefully with a clean "no runtime" message
+- **Container listing** — Shows all containers (running and stopped) with ID, name, image, state, status, and ports in a sortable table
+- **State-aware actions** — Contextual buttons per container: Start/Stop/Restart/Pause/Unpause/Remove — only relevant actions appear based on current state
+- **Container inspect** — Expand any row to view the full `docker inspect` JSON output, formatted and scrollable
+- **Container logs** — Switch to the Logs tab to see the last 100 lines of container output
+- **Color-coded states** — Running (emerald), exited (red), paused (amber), created (blue), restarting (cyan)
+- **Filter and auto-refresh** — Search by container name/image/ID, toggle 5-second auto-refresh
+- **Event recording** — Container actions (start, stop, restart, etc.) are recorded in the event timeline
 
 ### Ansible Integration (Ziggy)
 
@@ -565,7 +578,16 @@ Package actions: `check-updates`, `upgrade`, `full-upgrade`, `list-installed`, `
 |:-------|:---------|:------------|
 | `GET` | `/api/events?node_id=X&type=Y&limit=50&before=123` | List events (paginated, filterable by node and type) |
 
-Event types: `node.connected`, `node.disconnected`, `node.added`, `node.removed`, `deploy.started`, `fleet.command`, `ansible.run`, `service.action`, `process.signal`, `drift.snapshot`, `security.scan`
+Event types: `node.connected`, `node.disconnected`, `node.added`, `node.removed`, `deploy.started`, `fleet.command`, `ansible.run`, `service.action`, `process.signal`, `drift.snapshot`, `security.scan`, `container.action`
+
+### Container Management (Suffragette City)
+
+| Method | Endpoint | Description |
+|:-------|:---------|:------------|
+| `GET` | `/api/containers/:id/list` | List all containers (Docker or Podman, tab-delimited) |
+| `GET` | `/api/containers/:id/inspect?id=CONTAINER` | Inspect container JSON |
+| `POST` | `/api/containers/:id/action` | Execute action `{id, action}` (start/stop/restart/pause/unpause/rm) |
+| `GET` | `/api/containers/:id/logs?id=CONTAINER&tail=100` | Fetch container logs (tail, max 500) |
 
 ### Ansible
 

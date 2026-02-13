@@ -353,11 +353,12 @@ export interface Capabilities {
   logs: boolean
   drift: boolean
   security: boolean
+  containers: boolean
 }
 
 export async function fetchCapabilities(): Promise<Capabilities> {
   const res = await apiFetch(`${BASE}/api/capabilities`)
-  if (!res.ok) return { deployer: false, auth: false, ansible: false, fleet: false, services: false, processes: false, logs: false, drift: false, security: false }
+  if (!res.ok) return { deployer: false, auth: false, ansible: false, fleet: false, services: false, processes: false, logs: false, drift: false, security: false, containers: false }
   return res.json()
 }
 
@@ -819,4 +820,76 @@ export async function securityScan(nodeId: string): Promise<SecurityScanResult> 
     throw new Error(err.error || `HTTP ${res.status}`)
   }
   return res.json()
+}
+
+// --- Container Management (Suffragette City) ---
+
+export interface ContainerInfo {
+  id: string
+  name: string
+  image: string
+  status: string
+  state: string
+  ports: string
+  size: string
+}
+
+export interface ContainerResult {
+  ok: boolean
+  output: string
+}
+
+export async function fetchContainers(nodeId: string): Promise<ContainerResult> {
+  const res = await apiFetch(`${BASE}/api/containers/${nodeId}/list`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function inspectContainer(nodeId: string, containerId: string): Promise<ContainerResult> {
+  const res = await apiFetch(`${BASE}/api/containers/${nodeId}/inspect?id=${encodeURIComponent(containerId)}`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function containerAction(nodeId: string, containerId: string, action: string): Promise<ContainerResult> {
+  const res = await apiFetch(`${BASE}/api/containers/${nodeId}/action`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: containerId, action }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function fetchContainerLogs(nodeId: string, containerId: string, tail?: number): Promise<ContainerResult> {
+  const res = await apiFetch(`${BASE}/api/containers/${nodeId}/logs?id=${encodeURIComponent(containerId)}&tail=${tail ?? 100}`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export function parseContainerList(output: string): ContainerInfo[] {
+  return output.split('\n').filter(l => l.trim()).map(line => {
+    const parts = line.split('\t')
+    return {
+      id: parts[0] ?? '',
+      name: parts[1] ?? '',
+      image: parts[2] ?? '',
+      status: parts[3] ?? '',
+      state: parts[4] ?? '',
+      ports: parts[5] ?? '',
+      size: parts[6] ?? '',
+    }
+  })
 }

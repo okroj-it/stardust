@@ -153,6 +153,40 @@ pub const SysInfo = struct {
             }
         }
         self.cpu_cores = cores;
+
+        // ARM64 /proc/cpuinfo lacks "model name" — try fallbacks
+        if (!got_model) {
+            self.readCpuModelFallback();
+        }
+    }
+
+    fn readCpuModelFallback(self: *SysInfo) void {
+        // Try 1: /sys/firmware/devicetree/base/model (RPi, SBCs)
+        if (std.fs.openFileAbsolute("/sys/firmware/devicetree/base/model", .{})) |file| {
+            defer file.close();
+            const n = file.readAll(&self.cpu_model_buf) catch return;
+            self.cpu_model_len = std.mem.trimRight(u8, self.cpu_model_buf[0..n], &.{ 0, '\n', ' ' }).len;
+            if (self.cpu_model_len > 0) return;
+        } else |_| {}
+
+        // Try 2: "Hardware" field from /proc/cpuinfo (older ARM kernels)
+        const file = std.fs.openFileAbsolute("/proc/cpuinfo", .{}) catch return;
+        defer file.close();
+        var read_buf: [16384]u8 = undefined;
+        const n = file.readAll(&read_buf) catch return;
+        var iter = std.mem.splitScalar(u8, read_buf[0..n], '\n');
+        while (iter.next()) |line| {
+            if (std.mem.startsWith(u8, line, "Hardware")) {
+                if (std.mem.indexOf(u8, line, ": ")) |pos| {
+                    const val = std.mem.trim(u8, line[pos + 2 ..], " \t\r");
+                    if (val.len <= self.cpu_model_buf.len) {
+                        @memcpy(self.cpu_model_buf[0..val.len], val);
+                        self.cpu_model_len = val.len;
+                        return;
+                    }
+                }
+            }
+        }
     }
 
     fn readMemTotal(self: *SysInfo) void {

@@ -19,6 +19,8 @@ const LogEngine = log_mod.LogEngine;
 const DriftEngine = @import("drift.zig").DriftEngine;
 const security_mod = @import("security.zig");
 const SecurityEngine = security_mod.SecurityEngine;
+const container_mod = @import("containers.zig");
+const ContainerEngine = container_mod.ContainerEngine;
 const common = @import("common");
 
 pub const Api = struct {
@@ -36,6 +38,7 @@ pub const Api = struct {
     logs: ?*LogEngine = null,
     drift: ?*DriftEngine = null,
     security: ?*SecurityEngine = null,
+    containers: ?*ContainerEngine = null,
 
     pub fn init(allocator: std.mem.Allocator, store: *Store) Api {
         return .{
@@ -94,6 +97,10 @@ pub const Api = struct {
 
     pub fn setSecurity(self: *Api, s: *SecurityEngine) void {
         self.security = s;
+    }
+
+    pub fn setContainers(self: *Api, c: *ContainerEngine) void {
+        self.containers = c;
     }
 
     pub fn handleRequest(self: *Api, r: zap.Request) !void {
@@ -178,6 +185,8 @@ pub const Api = struct {
             try self.handleDrift(r, path);
         } else if (std.mem.startsWith(u8, path, "/api/security/")) {
             try self.handleSecurity(r, path);
+        } else if (std.mem.startsWith(u8, path, "/api/containers/")) {
+            try self.handleContainers(r, path);
         } else {
             return; // Let static file handler deal with it
         }
@@ -1256,7 +1265,7 @@ pub const Api = struct {
         defer if (ansible_ver != null) self.allocator.free(ver_json);
 
         const resp = std.fmt.allocPrint(self.allocator,
-            \\{{"deployer":{s},"auth":{s},"ansible":{s},"ansible_version":{s},"fleet":{s},"services":{s},"processes":{s},"logs":{s},"drift":{s},"security":{s}}}
+            \\{{"deployer":{s},"auth":{s},"ansible":{s},"ansible_version":{s},"fleet":{s},"services":{s},"processes":{s},"logs":{s},"drift":{s},"security":{s},"containers":{s}}}
         , .{
             if (self.deployer != null) "true" else "false",
             if (self.auth != null) "true" else "false",
@@ -1268,6 +1277,7 @@ pub const Api = struct {
             if (self.logs != null) "true" else "false",
             if (self.drift != null) "true" else "false",
             if (self.security != null) "true" else "false",
+            if (self.containers != null) "true" else "false",
         }) catch {
             r.setStatus(.internal_server_error);
             try r.sendJson("{\"error\":\"response serialization failed\"}");
@@ -2545,6 +2555,199 @@ pub const Api = struct {
         defer self.allocator.free(resp);
         try r.sendJson(resp);
     }
+
+    // --- Container Management (Suffragette City) ---
+
+    fn handleContainers(self: *Api, r: zap.Request, path: []const u8) !void {
+        const engine = self.containers orelse {
+            r.setStatus(.service_unavailable);
+            try r.sendJson("{\"error\":\"container engine not available\"}");
+            return;
+        };
+
+        const after = path["/api/containers/".len..];
+        const slash_pos = std.mem.indexOf(u8, after, "/");
+        if (slash_pos == null) {
+            r.setStatus(.not_found);
+            try r.sendJson("{\"error\":\"missing sub-path\"}");
+            return;
+        }
+        const node_id = after[0..slash_pos.?];
+        const rest = after[slash_pos.?..];
+
+        if (std.mem.eql(u8, rest, "/list")) {
+            try self.handleContainerList(r, engine, node_id);
+        } else if (std.mem.eql(u8, rest, "/inspect")) {
+            try self.handleContainerInspect(r, engine, node_id);
+        } else if (std.mem.eql(u8, rest, "/action")) {
+            try self.handleContainerAction(r, engine, node_id);
+        } else if (std.mem.eql(u8, rest, "/logs")) {
+            try self.handleContainerLogs(r, engine, node_id);
+        } else {
+            r.setStatus(.not_found);
+            try r.sendJson("{\"error\":\"not found\"}");
+        }
+    }
+
+    fn handleContainerList(self: *Api, r: zap.Request, engine: *ContainerEngine, node_id: []const u8) !void {
+        if (r.methodAsEnum() != .GET) {
+            r.setStatus(.method_not_allowed);
+            try r.sendJson("{\"error\":\"method not allowed\"}");
+            return;
+        }
+
+        const result = engine.listContainers(node_id);
+        defer if (result.output.len > 0) self.allocator.free(result.output);
+
+        const escaped = jsonEscape(self.allocator, result.output) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(escaped);
+
+        const resp = std.fmt.allocPrint(self.allocator,
+            \\{{"ok":{s},"output":"{s}"}}
+        , .{
+            if (result.ok) "true" else "false",
+            escaped,
+        }) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(resp);
+        try r.sendJson(resp);
+    }
+
+    fn handleContainerInspect(self: *Api, r: zap.Request, engine: *ContainerEngine, node_id: []const u8) !void {
+        if (r.methodAsEnum() != .GET) {
+            r.setStatus(.method_not_allowed);
+            try r.sendJson("{\"error\":\"method not allowed\"}");
+            return;
+        }
+
+        const container_id = r.getParamSlice("id") orelse {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"missing id parameter\"}");
+            return;
+        };
+
+        const result = engine.containerInspect(node_id, container_id);
+        defer if (result.output.len > 0) self.allocator.free(result.output);
+
+        const escaped = jsonEscape(self.allocator, result.output) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(escaped);
+
+        const resp = std.fmt.allocPrint(self.allocator,
+            \\{{"ok":{s},"output":"{s}"}}
+        , .{
+            if (result.ok) "true" else "false",
+            escaped,
+        }) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(resp);
+        try r.sendJson(resp);
+    }
+
+    fn handleContainerAction(self: *Api, r: zap.Request, engine: *ContainerEngine, node_id: []const u8) !void {
+        if (r.methodAsEnum() != .POST) {
+            r.setStatus(.method_not_allowed);
+            try r.sendJson("{\"error\":\"method not allowed\"}");
+            return;
+        }
+
+        const body = r.body orelse {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"missing request body\"}");
+            return;
+        };
+        const parsed = std.json.parseFromSlice(ContainerActionRequest, self.allocator, body, .{ .ignore_unknown_fields = true }) catch {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"invalid JSON\"}");
+            return;
+        };
+        defer parsed.deinit();
+        const req = parsed.value;
+
+        const result = engine.containerAction(node_id, req.id, req.action);
+        defer if (result.output.len > 0) self.allocator.free(result.output);
+
+        if (result.ok) {
+            if (self.db) |edb| {
+                var msg_buf: [128]u8 = undefined;
+                const msg = std.fmt.bufPrint(&msg_buf, "{s} container '{s}'", .{ req.action, req.id }) catch "Container action";
+                edb.insertEvent("container.action", node_id, msg, null);
+            }
+        }
+
+        const escaped = jsonEscape(self.allocator, result.output) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(escaped);
+
+        const resp = std.fmt.allocPrint(self.allocator,
+            \\{{"ok":{s},"output":"{s}"}}
+        , .{
+            if (result.ok) "true" else "false",
+            escaped,
+        }) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(resp);
+        try r.sendJson(resp);
+    }
+
+    fn handleContainerLogs(self: *Api, r: zap.Request, engine: *ContainerEngine, node_id: []const u8) !void {
+        if (r.methodAsEnum() != .GET) {
+            r.setStatus(.method_not_allowed);
+            try r.sendJson("{\"error\":\"method not allowed\"}");
+            return;
+        }
+
+        const container_id = r.getParamSlice("id") orelse {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"missing id parameter\"}");
+            return;
+        };
+
+        const tail_str = r.getParamSlice("tail") orelse "100";
+        const tail = std.fmt.parseInt(u32, tail_str, 10) catch 100;
+
+        const result = engine.containerLogs(node_id, container_id, tail);
+        defer if (result.output.len > 0) self.allocator.free(result.output);
+
+        const escaped = jsonEscape(self.allocator, result.output) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(escaped);
+
+        const resp = std.fmt.allocPrint(self.allocator,
+            \\{{"ok":{s},"output":"{s}"}}
+        , .{
+            if (result.ok) "true" else "false",
+            escaped,
+        }) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"response serialization failed\"}");
+            return;
+        };
+        defer self.allocator.free(resp);
+        try r.sendJson(resp);
+    }
 };
 
 const DriftSnapshotRequest = struct {
@@ -2798,6 +3001,13 @@ const ServiceActionRequest = struct {
 const ProcessKillRequest = struct {
     pid: u32,
     signal: u8 = 15,
+};
+
+// --- Container Manager ---
+
+const ContainerActionRequest = struct {
+    id: []const u8,
+    action: []const u8,
 };
 
 // --- Log Streaming ---

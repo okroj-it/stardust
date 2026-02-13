@@ -10,6 +10,7 @@ import { ServiceManager } from "./service-manager"
 import { ProcessExplorer } from "./process-explorer"
 import { LogViewer } from "./log-viewer"
 import { SecurityPosture } from "./security-posture"
+import { ContainerManager } from "./container-manager"
 import { EventTimeline } from "./event-timeline"
 import type { NodeStatus, Capabilities } from "@/lib/api"
 import { deployStep, updateNodeTags, fetchAllTags } from "@/lib/api"
@@ -35,6 +36,7 @@ import {
   Cog,
   Tag,
   Shield,
+  Container,
 } from "lucide-react"
 
 interface NodeDetailProps {
@@ -56,6 +58,7 @@ export function NodeDetail({ node, onClose, onRemove, onTagsChanged, capabilitie
   const [showLogs, setShowLogs] = useState(false)
   const [showSecurity, setShowSecurity] = useState(false)
   const [showEvents, setShowEvents] = useState(false)
+  const [showContainer, setShowContainer] = useState(false)
 
   const cpuHistory = history.map((h) => h.cpu.usage_percent)
   const memHistory = history.map((h) => h.memory.used_percent)
@@ -118,6 +121,15 @@ export function NodeDetail({ node, onClose, onRemove, onTagsChanged, capabilitie
               title="Services"
             >
               <Cog className="w-4 h-4" />
+            </button>
+          )}
+          {capabilities?.containers && node.connected && (
+            <button
+              onClick={() => setShowContainer(true)}
+              className="p-2 rounded-lg hover:bg-blue-500/10 text-muted-foreground hover:text-blue-400 transition-colors"
+              title="Container"
+            >
+              <Container className="w-4 h-4" />
             </button>
           )}
           {capabilities?.security && node.connected && (
@@ -371,6 +383,14 @@ export function NodeDetail({ node, onClose, onRemove, onTagsChanged, capabilitie
         />
       )}
 
+      {showContainer && (
+        <ContainerManager
+          nodeId={nodeId}
+          nodeName={node.name}
+          onClose={() => setShowContainer(false)}
+        />
+      )}
+
       {showServices && (
         <ServiceManager
           nodeId={nodeId}
@@ -398,6 +418,7 @@ export function NodeDetail({ node, onClose, onRemove, onTagsChanged, capabilitie
       {showReinstall && (
         <ReinstallDialog
           nodeId={nodeId}
+          arch={node.arch ?? undefined}
           onClose={() => setShowReinstall(false)}
         />
       )}
@@ -654,7 +675,7 @@ function TagEditor({ nodeId, tags, onChanged }: { nodeId: string; tags: string[]
 
 type ReinstallStep = 'confirm' | 'stopping' | 'uploading' | 'installing' | 'starting' | 'done' | 'error'
 
-function ReinstallDialog({ nodeId, onClose }: { nodeId: string; onClose: () => void }) {
+function ReinstallDialog({ nodeId, arch, onClose }: { nodeId: string; arch?: string; onClose: () => void }) {
   const [step, setStep] = useState<ReinstallStep>('confirm')
   const [error, setError] = useState<string | null>(null)
 
@@ -669,7 +690,7 @@ function ReinstallDialog({ nodeId, onClose }: { nodeId: string; onClose: () => v
     for (const s of steps) {
       setStep(s.label)
       try {
-        const res = await deployStep(nodeId, s.step)
+        const res = await deployStep(nodeId, s.step, s.step === 'upload' ? arch : undefined)
         if (!res.ok) {
           setError(res.message)
           setStep('error')
