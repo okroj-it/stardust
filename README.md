@@ -157,7 +157,7 @@ Spiders auto-detect and report: **OS** (name, version, ID), **kernel**, **archit
 - **Secure execution** — System-scope commands use sudo with decrypted passwords; user-scope commands set `XDG_RUNTIME_DIR` for non-interactive SSH
 - **Input validation** — Service names are validated server-side to prevent shell injection
 
-### Process Explorer
+### Process Explorer (Ashes to Ashes)
 
 - **Live process table** — Browser-based top/htop view per node, powered by `ps aux` over SSH
 - **Sortable columns** — Click to sort by CPU, memory, PID, user, RSS, or command (descending by CPU by default)
