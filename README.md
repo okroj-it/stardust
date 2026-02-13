@@ -6,8 +6,15 @@
 
 <p align="center">
   <em>A lightweight server monitoring & orchestration platform built in Zig.<br/>
-  Deploy zero-dependency agents to your Linux fleet, collect real-time telemetry over WebSockets,<br/>
-  tag and group nodes, open interactive SSH terminals, run fleet-wide commands, manage packages and systemd services, explore processes with kill signals, stream logs in real time, manage Docker/Podman containers, audit security posture with scoring, execute Ansible playbooks, detect configuration drift, track every action in an event timeline, and export Prometheus metrics — all from a single binary and a clean React dashboard.</em>
+  Single binary. Zero-dependency agents. Real-time telemetry over WebSockets.</em>
+</p>
+
+<p align="center">
+  <em>
+  SSH terminals · fleet commands · package management · systemd services · process explorer<br/>
+  log streaming · Docker/Podman containers · security posture scoring · Ansible playbooks<br/>
+  drift detection · event timeline · Prometheus metrics · node tagging
+  </em>
 </p>
 
 <p align="center">
