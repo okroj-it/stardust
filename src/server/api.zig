@@ -1003,7 +1003,7 @@ pub const Api = struct {
         var message: []const u8 = "";
 
         const result = if (std.mem.eql(u8, step, "upload"))
-            deployer.stepUploadBinary(node_id)
+            deployer.stepUploadBinary(node_id, r.getParamSlice("arch"))
         else if (std.mem.eql(u8, step, "install"))
             deployer.stepInstallService(node_id)
         else if (std.mem.eql(u8, step, "start")) blk: {

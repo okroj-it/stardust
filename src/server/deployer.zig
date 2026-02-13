@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Db = @import("db.zig").Db;
 const CryptoEngine = @import("crypto.zig").CryptoEngine;
 const EncryptedData = @import("crypto.zig").EncryptedData;
@@ -158,13 +159,23 @@ pub const Deployer = struct {
     }
 
     /// Step 1: Upload agent binary to the node via SCP.
-    pub fn stepUploadBinary(self: *Deployer, node_id: []const u8) StepResult {
+    /// target_arch comes from the pre-flight check (uname -m); falls back to host arch if null.
+    pub fn stepUploadBinary(self: *Deployer, node_id: []const u8, target_arch: ?[]const u8) StepResult {
         const ctx = self.setupSshContext(node_id) catch |err|
             return .{ .ok = false, .message = sshSetupError(err) };
         defer ctx.deinit(self);
 
-        // Determine which binary to upload (arch-specific or default)
-        const binary_path = self.agent_binary_path;
+        const arch = target_arch orelse host_arch;
+
+        // Resolve the correct binary for this architecture
+        const binary_path = self.resolveAgentBinary(arch) orelse {
+            std.log.err("[MAJOR TOM] No Spider binary for arch '{s}'", .{arch});
+            return .{ .ok = false, .message = "No Spider binary for this architecture" };
+        };
+        const free_binary = !std.mem.eql(u8, binary_path, self.agent_binary_path);
+        defer if (free_binary) self.allocator.free(binary_path);
+
+        std.log.info("[MAJOR TOM] Uploading Spider ({s}) to {s}", .{ arch, node_id });
 
         const scp_dest = std.fmt.allocPrint(self.allocator, "{s}:/tmp/stardust-spider", .{ctx.host_arg}) catch
             return .{ .ok = false, .message = "internal error" };
@@ -468,16 +479,34 @@ pub const Deployer = struct {
         try file.writeAll(key);
     }
 
+    const host_arch = @tagName(builtin.cpu.arch);
+
+    /// Resolve which Spider binary to deploy for a given target architecture.
+    /// Returns an allocated path for arch-specific binaries, or null if no suitable binary exists.
+    /// Caller must free the returned path if it differs from agent_binary_path.
+    fn resolveAgentBinary(self: *Deployer, target_arch: []const u8) ?[]const u8 {
+        // Prefer arch-specific: e.g. stardust-spider-aarch64
+        const arch_specific = std.fmt.allocPrint(self.allocator, "{s}-{s}", .{ self.agent_binary_path, target_arch }) catch return null;
+        if (std.fs.cwd().access(arch_specific, .{})) |_| {
+            return arch_specific;
+        } else |_| {
+            self.allocator.free(arch_specific);
+        }
+
+        // Fallback to default binary only if target matches host arch
+        if (std.mem.eql(u8, target_arch, host_arch)) {
+            if (std.fs.cwd().access(self.agent_binary_path, .{})) |_| return self.agent_binary_path else |_| {}
+        }
+
+        return null;
+    }
+
     fn hasAgentBinary(self: *Deployer, arch: []const u8) bool {
-        // Check arch-specific: e.g. stardust-spider-x86_64
-        const arch_specific = std.fmt.allocPrint(self.allocator, "{s}-{s}", .{ self.agent_binary_path, arch }) catch return false;
-        defer self.allocator.free(arch_specific);
-        if (std.fs.cwd().access(arch_specific, .{})) |_| return true else |_| {}
-
-        // Fallback: default binary
-        if (std.fs.cwd().access(self.agent_binary_path, .{})) |_| return true else |_| {}
-
-        return false;
+        const resolved = self.resolveAgentBinary(arch) orelse return false;
+        if (!std.mem.eql(u8, resolved, self.agent_binary_path)) {
+            self.allocator.free(resolved);
+        }
+        return true;
     }
 
     fn runSudoSsh(

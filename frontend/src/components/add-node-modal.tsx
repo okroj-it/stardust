@@ -111,7 +111,7 @@ export function AddNodeModal({ onClose, onSuccess }: AddNodeModalProps) {
 
       // Step 4: Upload binary
       updateStep('upload', 'running')
-      const uploadRes = await deployStep(node.id, 'upload')
+      const uploadRes = await deployStep(node.id, 'upload', check.arch ?? undefined)
       if (!uploadRes.ok) {
         updateStep('upload', 'error', uploadRes.message)
         await deleteNode(node.id).catch(() => {})

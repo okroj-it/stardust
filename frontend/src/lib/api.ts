@@ -253,8 +253,10 @@ export interface DeployStepResult {
   message: string
 }
 
-export async function deployStep(nodeId: string, step: 'upload' | 'install' | 'start' | 'connect' | 'stop' | 'check-stopped' | 'uninstall' | 'check-uninstalled' | 'remove-binary' | 'check-removed' | 'wipe-creds' | 'detect-pkg-manager'): Promise<DeployStepResult> {
-  const res = await apiFetch(`${BASE}/api/nodes/${nodeId}/deploy?step=${step}`, {
+export async function deployStep(nodeId: string, step: 'upload' | 'install' | 'start' | 'connect' | 'stop' | 'check-stopped' | 'uninstall' | 'check-uninstalled' | 'remove-binary' | 'check-removed' | 'wipe-creds' | 'detect-pkg-manager', arch?: string): Promise<DeployStepResult> {
+  let url = `${BASE}/api/nodes/${nodeId}/deploy?step=${step}`
+  if (arch) url += `&arch=${arch}`
+  const res = await apiFetch(url, {
     method: 'POST',
   })
   if (!res.ok) {

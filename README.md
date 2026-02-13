@@ -114,7 +114,7 @@ Spiders auto-detect and report: **OS** (name, version, ID), **kernel**, **archit
 - **One-click onboarding** — SSH into a target, upload Spider binary, install systemd service, verify connection
 - **Clean teardown** — Stop service, uninstall unit, remove binary, wipe credentials from database
 - **Encrypted credentials** — SSH keys and sudo passwords encrypted at rest with AES-GCM-256 (bcrypt-pbkdf derived keys)
-- **Architecture-aware** — Detects target arch before deployment
+- **Architecture-aware** — Detects target arch via `uname -m` during pre-flight check and selects the correct Spider binary (x86\_64 or aarch64)
 
 ### Package Management
 
@@ -286,8 +286,11 @@ scrape_configs:
 # 1. Build the frontend
 cd frontend && npm install && npm run build && cd ..
 
-# 2. Build server + agent
+# 2. Build server + agent (x86_64)
 zig build -Dcpu=baseline -Doptimize=ReleaseSafe
+
+# 3. (Optional) Cross-compile Spider for ARM64
+zig build spider-aarch64 -Doptimize=ReleaseSafe
 ```
 
 > **Note:** `-Dcpu=baseline` ensures compatibility with older x86\_64 CPUs. Omit it if all your machines have modern instruction sets.
@@ -297,7 +300,10 @@ Binaries land in `zig-out/bin/`:
 | Binary | Size | Description |
 |:-------|:-----|:------------|
 | `stardust-server` | ~12 MB | Ground Control (server + embedded UI) |
-| `stardust-spider` | ~6.5 MB | Spider agent (zero dependencies, static) |
+| `stardust-spider` | ~6.5 MB | Spider agent (zero dependencies, static, x86\_64) |
+| `stardust-spider-aarch64` | ~6.5 MB | Spider agent for ARM64 (cross-compiled, optional) |
+
+Place the ARM64 Spider alongside the default binary on the Ground Control host. When deploying to an ARM64 node, Major Tom automatically detects the target architecture and uploads the correct binary.
 
 ### Configuration
 
@@ -688,8 +694,12 @@ stardust/
 cd frontend && npm ci && npm run build && cd ..
 zig build -Dcpu=baseline -Doptimize=ReleaseSafe
 
-# 2. Deploy binary to your server
+# 1b. (Optional) Cross-compile Spider for ARM64 nodes
+zig build spider-aarch64 -Doptimize=ReleaseSafe
+
+# 2. Deploy binaries to your server
 scp zig-out/bin/stardust-server you@server:/opt/stardust/
+scp zig-out/bin/stardust-spider-aarch64 you@server:/opt/stardust/  # if you have ARM64 nodes
 
 # 3. Configure and run
 export STARDUST_SECRET="$(openssl rand -hex 32)"

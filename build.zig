@@ -65,6 +65,29 @@ pub fn build(b: *std.Build) void {
     server.step.dependOn(&frontend_step.step);
     b.installArtifact(server);
 
+    // --- Cross-compiled Spider binaries ---
+    const spider_cross = b.step("spider-aarch64", "Cross-compile Spider for aarch64-linux");
+    const arm64_target = b.resolveTargetQuery(.{
+        .cpu_arch = .aarch64,
+        .os_tag = .linux,
+    });
+    const arm64_common = b.addModule("common_arm64", .{
+        .root_source_file = b.path("src/common/root.zig"),
+        .target = arm64_target,
+        .optimize = optimize,
+    });
+    const arm64_agent_mod = b.addModule("agent_arm64", .{
+        .root_source_file = b.path("src/agent/main.zig"),
+        .target = arm64_target,
+        .optimize = optimize,
+    });
+    arm64_agent_mod.addImport("common", arm64_common);
+    const arm64_agent = b.addExecutable(.{
+        .name = "stardust-spider-aarch64",
+        .root_module = arm64_agent_mod,
+    });
+    spider_cross.dependOn(&b.addInstallArtifact(arm64_agent, .{}).step);
+
     // --- Tests ---
     const test_step = b.step("test", "Run unit tests");
 
