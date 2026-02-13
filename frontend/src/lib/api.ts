@@ -880,7 +880,7 @@ export async function fetchContainerLogs(nodeId: string, containerId: string, ta
 }
 
 export function parseContainerList(output: string): ContainerInfo[] {
-  return output.split('\n').filter(l => l.trim()).map(line => {
+  return output.split('\n').filter(l => l.trim() && l.includes('\t')).map(line => {
     const parts = line.split('\t')
     return {
       id: parts[0] ?? '',

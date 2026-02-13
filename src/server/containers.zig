@@ -95,7 +95,9 @@ pub const ContainerEngine = struct {
         defer self.allocator.free(result.stderr);
 
         const ok = result.term.Exited == 0;
-        return .{ .ok = ok, .output = result.stdout };
+        // Strip [sudo] prompt lines that leak via 2>&1
+        const output = stripSudoNoise(self.allocator, result.stdout);
+        return .{ .ok = ok, .output = output };
     }
 
     const SshContext = struct {
@@ -178,6 +180,21 @@ fn isValidContainerId(id: []const u8) bool {
         if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '.' and c != '-') return false;
     }
     return true;
+}
+
+fn stripSudoNoise(allocator: std.mem.Allocator, raw: []const u8) []const u8 {
+    // Filter out "[sudo] password for ..." lines from output
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    var iter = std.mem.splitScalar(u8, raw, '\n');
+    var first = true;
+    while (iter.next()) |line| {
+        if (std.mem.startsWith(u8, line, "[sudo]")) continue;
+        if (!first) buf.append(allocator, '\n') catch {};
+        buf.appendSlice(allocator, line) catch {};
+        first = false;
+    }
+    allocator.free(raw);
+    return buf.toOwnedSlice(allocator) catch "";
 }
 
 fn isValidAction(action: []const u8) bool {
