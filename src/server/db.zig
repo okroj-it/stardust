@@ -146,6 +146,40 @@ pub const Db = struct {
         conn.execNoArgs("CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at DESC)") catch {};
         conn.execNoArgs("CREATE INDEX IF NOT EXISTS idx_events_node ON events(node_id)") catch {};
 
+        try conn.execNoArgs(
+            \\CREATE TABLE IF NOT EXISTS schedules (
+            \\    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            \\    name        TEXT NOT NULL,
+            \\    job_type    TEXT NOT NULL,
+            \\    config      TEXT NOT NULL,
+            \\    target_type TEXT NOT NULL,
+            \\    target_value TEXT,
+            \\    cron_minute TEXT DEFAULT '*',
+            \\    cron_hour   TEXT DEFAULT '*',
+            \\    cron_dom    TEXT DEFAULT '*',
+            \\    cron_month  TEXT DEFAULT '*',
+            \\    cron_dow    TEXT DEFAULT '*',
+            \\    enabled     INTEGER DEFAULT 1,
+            \\    last_run    INTEGER,
+            \\    last_status TEXT,
+            \\    created_at  INTEGER NOT NULL,
+            \\    updated_at  INTEGER NOT NULL
+            \\)
+        );
+
+        try conn.execNoArgs(
+            \\CREATE TABLE IF NOT EXISTS schedule_runs (
+            \\    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            \\    schedule_id INTEGER NOT NULL,
+            \\    started_at  INTEGER NOT NULL,
+            \\    finished_at INTEGER,
+            \\    status      TEXT NOT NULL,
+            \\    output      TEXT,
+            \\    FOREIGN KEY (schedule_id) REFERENCES schedules(id) ON DELETE CASCADE
+            \\)
+        );
+        conn.execNoArgs("CREATE INDEX IF NOT EXISTS idx_schedule_runs_sched ON schedule_runs(schedule_id, started_at DESC)") catch {};
+
         // Migration: add sudo columns if missing (for existing DBs)
         conn.execNoArgs("ALTER TABLE nodes ADD COLUMN sudo_pass_enc BLOB") catch {};
         conn.execNoArgs("ALTER TABLE nodes ADD COLUMN sudo_pass_nonce BLOB") catch {};
@@ -165,6 +199,16 @@ pub const Db = struct {
         // Prune events older than 30 days
         const cutoff = std.time.timestamp() - 30 * 86400;
         conn.exec("DELETE FROM events WHERE created_at < ?1", .{cutoff}) catch {};
+
+        // Mark stale schedule runs as failed (server crashed mid-execution)
+        conn.exec("UPDATE schedule_runs SET status = 'failed', finished_at = ?1 WHERE status = 'running' OR status = 'pending'", .{std.time.timestamp()}) catch {};
+
+        // Prune old schedule runs (keep last 100 per schedule)
+        conn.execNoArgs(
+            \\DELETE FROM schedule_runs WHERE id NOT IN (
+            \\    SELECT id FROM schedule_runs ORDER BY started_at DESC LIMIT 1000
+            \\)
+        ) catch {};
 
         return .{ .conn = conn };
     }
@@ -606,6 +650,216 @@ pub const Db = struct {
         };
     }
 
+    // --- Schedules ---
+
+    /// Insert a schedule. Returns the row ID.
+    pub fn insertSchedule(
+        self: *Db,
+        name: []const u8,
+        job_type: []const u8,
+        config: []const u8,
+        target_type: []const u8,
+        target_value: ?[]const u8,
+        cron_minute: []const u8,
+        cron_hour: []const u8,
+        cron_dom: []const u8,
+        cron_month: []const u8,
+        cron_dow: []const u8,
+        enabled: bool,
+    ) !i64 {
+        const now = std.time.timestamp();
+        try self.conn.exec(
+            \\INSERT INTO schedules (name, job_type, config, target_type, target_value,
+            \\    cron_minute, cron_hour, cron_dom, cron_month, cron_dow, enabled, created_at, updated_at)
+            \\VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+        , .{ name, job_type, config, target_type, target_value, cron_minute, cron_hour, cron_dom, cron_month, cron_dow, @as(i64, if (enabled) 1 else 0), now, now });
+        const r = try self.conn.row("SELECT last_insert_rowid()", .{});
+        if (r) |row| {
+            defer row.deinit();
+            return row.int(0);
+        }
+        return error.InsertFailed;
+    }
+
+    /// Update a schedule.
+    pub fn updateSchedule(
+        self: *Db,
+        id: i64,
+        name: []const u8,
+        job_type: []const u8,
+        config: []const u8,
+        target_type: []const u8,
+        target_value: ?[]const u8,
+        cron_minute: []const u8,
+        cron_hour: []const u8,
+        cron_dom: []const u8,
+        cron_month: []const u8,
+        cron_dow: []const u8,
+    ) !void {
+        try self.conn.exec(
+            \\UPDATE schedules SET name = ?1, job_type = ?2, config = ?3, target_type = ?4,
+            \\    target_value = ?5, cron_minute = ?6, cron_hour = ?7, cron_dom = ?8,
+            \\    cron_month = ?9, cron_dow = ?10, updated_at = ?11 WHERE id = ?12
+        , .{ name, job_type, config, target_type, target_value, cron_minute, cron_hour, cron_dom, cron_month, cron_dow, std.time.timestamp(), id });
+    }
+
+    /// Delete a schedule (runs cascade-delete on schedule_runs).
+    pub fn deleteSchedule(self: *Db, id: i64) !void {
+        try self.conn.exec("DELETE FROM schedules WHERE id = ?1", .{id});
+    }
+
+    /// Toggle a schedule enabled/disabled.
+    pub fn setScheduleEnabled(self: *Db, id: i64, enabled: bool) !void {
+        try self.conn.exec("UPDATE schedules SET enabled = ?1, updated_at = ?2 WHERE id = ?3", .{
+            @as(i64, if (enabled) 1 else 0), std.time.timestamp(), id,
+        });
+    }
+
+    /// Update last_run and last_status after execution.
+    pub fn updateScheduleLastRun(self: *Db, id: i64, timestamp: i64, status: []const u8) void {
+        self.conn.exec("UPDATE schedules SET last_run = ?1, last_status = ?2, updated_at = ?3 WHERE id = ?4", .{
+            timestamp, status, std.time.timestamp(), id,
+        }) catch {};
+    }
+
+    /// Get a single schedule by ID.
+    pub fn getSchedule(self: *Db, allocator: std.mem.Allocator, id: i64) !?ScheduleRecord {
+        const r = try self.conn.row(
+            \\SELECT id, name, job_type, config, target_type, target_value,
+            \\    cron_minute, cron_hour, cron_dom, cron_month, cron_dow,
+            \\    enabled, last_run, last_status, created_at, updated_at
+            \\FROM schedules WHERE id = ?1
+        , .{id});
+        if (r) |row| {
+            defer row.deinit();
+            return @as(?ScheduleRecord, try readScheduleRow(allocator, row));
+        }
+        return null;
+    }
+
+    /// List all schedules.
+    pub fn listSchedules(self: *Db, allocator: std.mem.Allocator) ![]ScheduleRecord {
+        var rows = try self.conn.rows(
+            \\SELECT id, name, job_type, config, target_type, target_value,
+            \\    cron_minute, cron_hour, cron_dom, cron_month, cron_dow,
+            \\    enabled, last_run, last_status, created_at, updated_at
+            \\FROM schedules ORDER BY created_at DESC
+        , .{});
+        defer rows.deinit();
+
+        var result: std.ArrayListUnmanaged(ScheduleRecord) = .{};
+        while (rows.next()) |row| {
+            try result.append(allocator, try readScheduleRow(allocator, row));
+        }
+        return try result.toOwnedSlice(allocator);
+    }
+
+    /// List enabled schedules (for scheduler thread).
+    pub fn listEnabledSchedules(self: *Db, allocator: std.mem.Allocator) ![]ScheduleRecord {
+        var rows = try self.conn.rows(
+            \\SELECT id, name, job_type, config, target_type, target_value,
+            \\    cron_minute, cron_hour, cron_dom, cron_month, cron_dow,
+            \\    enabled, last_run, last_status, created_at, updated_at
+            \\FROM schedules WHERE enabled = 1
+        , .{});
+        defer rows.deinit();
+
+        var result: std.ArrayListUnmanaged(ScheduleRecord) = .{};
+        while (rows.next()) |row| {
+            try result.append(allocator, try readScheduleRow(allocator, row));
+        }
+        return try result.toOwnedSlice(allocator);
+    }
+
+    fn readScheduleRow(allocator: std.mem.Allocator, row: anytype) !ScheduleRecord {
+        return ScheduleRecord{
+            .id = row.int(0),
+            .name = try allocator.dupe(u8, row.text(1)),
+            .job_type = try allocator.dupe(u8, row.text(2)),
+            .config = try allocator.dupe(u8, row.text(3)),
+            .target_type = try allocator.dupe(u8, row.text(4)),
+            .target_value = if (row.nullableText(5)) |v| try allocator.dupe(u8, v) else null,
+            .cron_minute = try allocator.dupe(u8, row.text(6)),
+            .cron_hour = try allocator.dupe(u8, row.text(7)),
+            .cron_dom = try allocator.dupe(u8, row.text(8)),
+            .cron_month = try allocator.dupe(u8, row.text(9)),
+            .cron_dow = try allocator.dupe(u8, row.text(10)),
+            .enabled = row.int(11) != 0,
+            .last_run = row.nullableInt(12),
+            .last_status = if (row.nullableText(13)) |v| try allocator.dupe(u8, v) else null,
+            .created_at = row.int(14),
+            .updated_at = row.int(15),
+        };
+    }
+
+    /// Insert a schedule run. Returns the row ID.
+    pub fn insertScheduleRun(self: *Db, schedule_id: i64, status: []const u8) !i64 {
+        try self.conn.exec(
+            "INSERT INTO schedule_runs (schedule_id, started_at, status) VALUES (?1, ?2, ?3)",
+            .{ schedule_id, std.time.timestamp(), status },
+        );
+        const r = try self.conn.row("SELECT last_insert_rowid()", .{});
+        if (r) |row| {
+            defer row.deinit();
+            return row.int(0);
+        }
+        return error.InsertFailed;
+    }
+
+    /// Update a schedule run (on completion).
+    pub fn updateScheduleRun(self: *Db, id: i64, status: []const u8, output: ?[]const u8) void {
+        self.conn.exec(
+            "UPDATE schedule_runs SET status = ?1, finished_at = ?2, output = ?3 WHERE id = ?4",
+            .{ status, std.time.timestamp(), output, id },
+        ) catch {};
+    }
+
+    /// List runs for a schedule (newest first).
+    pub fn listScheduleRuns(self: *Db, allocator: std.mem.Allocator, schedule_id: i64, limit: i64) ![]ScheduleRunRecord {
+        var rows = try self.conn.rows(
+            "SELECT id, schedule_id, started_at, finished_at, status, output FROM schedule_runs WHERE schedule_id = ?1 ORDER BY started_at DESC LIMIT ?2",
+            .{ schedule_id, limit },
+        );
+        defer rows.deinit();
+
+        var result: std.ArrayListUnmanaged(ScheduleRunRecord) = .{};
+        while (rows.next()) |row| {
+            try result.append(allocator, ScheduleRunRecord{
+                .id = row.int(0),
+                .schedule_id = row.int(1),
+                .started_at = row.int(2),
+                .finished_at = row.nullableInt(3),
+                .status = try allocator.dupe(u8, row.text(4)),
+                .output = if (row.nullableText(5)) |v| try allocator.dupe(u8, v) else null,
+            });
+        }
+        return try result.toOwnedSlice(allocator);
+    }
+
+    /// Get nodes by tag. Returns node IDs. Caller frees.
+    pub fn getNodeIdsByTag(self: *Db, allocator: std.mem.Allocator, tag: []const u8) ![][]const u8 {
+        var rows = try self.conn.rows("SELECT node_id FROM node_tags WHERE tag = ?1", .{tag});
+        defer rows.deinit();
+
+        var result: std.ArrayListUnmanaged([]const u8) = .{};
+        while (rows.next()) |row| {
+            try result.append(allocator, try allocator.dupe(u8, row.text(0)));
+        }
+        return try result.toOwnedSlice(allocator);
+    }
+
+    /// Get all node IDs. Caller frees.
+    pub fn getAllNodeIds(self: *Db, allocator: std.mem.Allocator) ![][]const u8 {
+        var rows = try self.conn.rows("SELECT id FROM nodes", .{});
+        defer rows.deinit();
+
+        var result: std.ArrayListUnmanaged([]const u8) = .{};
+        while (rows.next()) |row| {
+            try result.append(allocator, try allocator.dupe(u8, row.text(0)));
+        }
+        return try result.toOwnedSlice(allocator);
+    }
+
     /// List events with optional filters and cursor-based pagination.
     pub fn listEvents(self: *Db, allocator: std.mem.Allocator, node_id: ?[]const u8, event_type: ?[]const u8, limit: i64, before_id: ?i64) ![]EventRecord {
         var rows = try self.conn.rows(
@@ -645,5 +899,52 @@ pub const EventRecord = struct {
         if (self.node_id) |v| allocator.free(v);
         allocator.free(self.message);
         if (self.detail) |v| allocator.free(v);
+    }
+};
+
+pub const ScheduleRecord = struct {
+    id: i64,
+    name: []const u8,
+    job_type: []const u8,
+    config: []const u8,
+    target_type: []const u8,
+    target_value: ?[]const u8,
+    cron_minute: []const u8,
+    cron_hour: []const u8,
+    cron_dom: []const u8,
+    cron_month: []const u8,
+    cron_dow: []const u8,
+    enabled: bool,
+    last_run: ?i64,
+    last_status: ?[]const u8,
+    created_at: i64,
+    updated_at: i64,
+
+    pub fn deinit(self: ScheduleRecord, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.job_type);
+        allocator.free(self.config);
+        allocator.free(self.target_type);
+        if (self.target_value) |v| allocator.free(v);
+        allocator.free(self.cron_minute);
+        allocator.free(self.cron_hour);
+        allocator.free(self.cron_dom);
+        allocator.free(self.cron_month);
+        allocator.free(self.cron_dow);
+        if (self.last_status) |v| allocator.free(v);
+    }
+};
+
+pub const ScheduleRunRecord = struct {
+    id: i64,
+    schedule_id: i64,
+    started_at: i64,
+    finished_at: ?i64,
+    status: []const u8,
+    output: ?[]const u8,
+
+    pub fn deinit(self: ScheduleRunRecord, allocator: std.mem.Allocator) void {
+        allocator.free(self.status);
+        if (self.output) |v| allocator.free(v);
     }
 };

@@ -13,7 +13,7 @@
   <em>
   SSH terminals · fleet commands · package management · systemd services · process explorer<br/>
   log streaming · Docker/Podman containers · security posture scoring · Ansible playbooks<br/>
-  drift detection · event timeline · Prometheus metrics · node tagging
+  drift detection · scheduled automation · event timeline · Prometheus metrics · node tagging
   </em>
 </p>
 
@@ -51,6 +51,7 @@ Every component draws from David Bowie's *Space Oddity* and *Ziggy Stardust* myt
 | Log Streaming | **Sound and Vision** | Real-time log tailing (journalctl & files) | *"Don't you wonder sometimes, 'bout sound and vision?"* |
 | Security Posture | **Heroes** | Per-node security audit with scoring | *"We can be heroes, just for one day"* |
 | Container Manager | **Suffragette City** | Docker/Podman container viewer and controller | *"Wham bam, thank you ma'am"* |
+| Scheduled Automation | **Station to Station** | Cron-based job scheduler with execution history | *"The return of the Thin White Duke"* |
 | Event Timeline | **Changes** | Audit trail for every action and connection event | *"Ch-ch-ch-ch-Changes, turn and face the strange"* |
 | Ansible | **Ziggy** | Optional Ansible orchestration engine | *"Ziggy played guitar"* |
 
@@ -76,11 +77,13 @@ Every component draws from David Bowie's *Space Oddity* and *Ziggy Stardust* myt
                     │                  │──── SSH (Sound&Vision)─►  │              │
                     │                  │──── SSH (Heroes) ──────►  │              │
                     │                  │──── SSH (Suffragette)──►  │              │
+                    │                  │──── SSH (Station)────►  │              │
                     └────────┬─────────┘                             └─────────────┘
                              │
                     ┌────────▼─────────┐       ┌─────────────────┐
                     │  SQLite (zqlite) │       │    Ansible       │
-                    │  nodes, users,   │       │  (optional)      │
+                    │  nodes, users,   │
+                    │  schedules,      │       │  (optional)      │
                     │  creds, events   │       │  galaxy + plays  │
                     └──────────────────┘       └─────────────────┘
 ```
@@ -222,6 +225,21 @@ Spiders auto-detect and report: **OS** (name, version, ID), **kernel**, **archit
 - **Color-coded states** — Running (emerald), exited (red), paused (amber), created (blue), restarting (cyan)
 - **Filter and auto-refresh** — Search by container name/image/ID, toggle 5-second auto-refresh
 - **Event recording** — Container actions (start, stop, restart, etc.) are recorded in the event timeline
+
+### Scheduled Automation (Station to Station)
+
+- **Cron-based scheduling** — Full 5-field cron expressions (minute, hour, day-of-month, month, day-of-week) supporting `*`, exact values, ranges (`1-5`), lists (`1,15,30`), and steps (`*/5`)
+- **Three job types** — Shell commands (with optional sudo), Ansible playbooks, and package updates (upgrade or full-upgrade)
+- **Flexible targeting** — Run against all nodes, a specific tag group, or hand-picked individual nodes
+- **SQLite persistence** — Schedules and execution history survive server restarts; stale runs from crashes are marked as failed on startup
+- **Background scheduler thread** — Wakes at each minute boundary, evaluates all enabled schedules, and dispatches matching jobs
+- **Execution history** — Every run is recorded with start/finish timestamps, status (pending/running/ok/failed), and captured output
+- **Cron presets** — Quick-select common schedules ("Every hour", "Every day at 3 AM", "Every Sunday at 3 AM", "1st of month") or enter custom expressions
+- **Live preview** — Human-readable description updates as you configure the cron expression
+- **Run Now** — Trigger any schedule immediately without waiting for the next cron match
+- **Enable/disable** — Toggle schedules on and off without deleting them
+- **Package manager aware** — Package update jobs detect the node's package manager (apt, dnf, yum, pacman, apk) and run the correct upgrade command
+- **Event recording** — Schedule executions and failures are logged in the event timeline
 
 ### Ansible Integration (Ziggy)
 
@@ -585,7 +603,7 @@ Package actions: `check-updates`, `upgrade`, `full-upgrade`, `list-installed`, `
 |:-------|:---------|:------------|
 | `GET` | `/api/events?node_id=X&type=Y&limit=50&before=123` | List events (paginated, filterable by node and type) |
 
-Event types: `node.connected`, `node.disconnected`, `node.added`, `node.removed`, `deploy.started`, `fleet.command`, `ansible.run`, `service.action`, `process.signal`, `drift.snapshot`, `security.scan`, `container.action`
+Event types: `node.connected`, `node.disconnected`, `node.added`, `node.removed`, `deploy.started`, `fleet.command`, `ansible.run`, `service.action`, `process.signal`, `drift.snapshot`, `security.scan`, `container.action`, `schedule.executed`, `schedule.failed`
 
 ### Container Management (Suffragette City)
 
@@ -596,11 +614,26 @@ Event types: `node.connected`, `node.disconnected`, `node.added`, `node.removed`
 | `POST` | `/api/containers/:id/action` | Execute action `{id, action}` (start/stop/restart/pause/unpause/rm) |
 | `GET` | `/api/containers/:id/logs?id=CONTAINER&tail=100` | Fetch container logs (tail, max 500) |
 
+### Scheduled Automation (Station to Station)
+
+| Method | Endpoint | Description |
+|:-------|:---------|:------------|
+| `GET` | `/api/schedules` | List all schedules |
+| `POST` | `/api/schedules` | Create schedule `{name, job_type, config, target_type, target_value?, cron_*}` |
+| `GET` | `/api/schedules/:id` | Get single schedule |
+| `PUT` | `/api/schedules/:id` | Update schedule |
+| `DELETE` | `/api/schedules/:id` | Delete schedule (cascades to runs) |
+| `POST` | `/api/schedules/:id/toggle` | Enable/disable schedule |
+| `POST` | `/api/schedules/:id/run` | Trigger immediate execution |
+| `GET` | `/api/schedules/:id/runs?limit=20` | Execution history |
+
+Job types: `command` (config: `{command, sudo?}`), `ansible` (config: `{playbook, requirements?}`), `package_update` (config: `{pkg_action}`)
+
 ### Ansible
 
 | Method | Endpoint | Description |
 |:-------|:---------|:------------|
-| `GET` | `/api/capabilities` | Server feature flags (ansible, deployer, auth, fleet, services, processes, drift, logs, security) |
+| `GET` | `/api/capabilities` | Server feature flags (ansible, deployer, auth, fleet, services, processes, drift, logs, security, schedules) |
 | `GET` | `/api/ansible/status` | Ansible version and availability |
 | `POST` | `/api/ansible/run` | Run playbook `{playbook, nodes?, requirements?}` |
 | `POST` | `/api/ansible/poll?job=ID&offset=N` | Poll playbook output |
@@ -671,6 +704,7 @@ stardust/
 │   │   ├── logs.zig          # Sound and Vision (log streaming)
 │   │   ├── security.zig     # Heroes (security posture scanner)
 │   │   ├── drift.zig         # Drift detection (SSH snapshots & parsing)
+│   │   ├── scheduler.zig    # Station to Station (cron scheduler)
 │   │   └── ansible.zig       # Ziggy (Ansible integration)
 │   ├── agent/
 │   │   ├── main.zig          # Spider entry point
@@ -701,6 +735,7 @@ stardust/
 │       │   ├── log-viewer.tsx     # Log streamer (Sound and Vision)
 │       │   ├── security-posture.tsx # Security scanner (Heroes)
 │       │   ├── event-timeline.tsx  # Event timeline (Changes)
+│       │   ├── schedule-manager.tsx # Scheduled automation (Station to Station)
 │       │   ├── ansible-modal.tsx   # Playbook runner
 │       │   ├── login-page.tsx
 │       │   └── profile-modal.tsx

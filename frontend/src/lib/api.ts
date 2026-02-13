@@ -354,11 +354,12 @@ export interface Capabilities {
   drift: boolean
   security: boolean
   containers: boolean
+  schedules: boolean
 }
 
 export async function fetchCapabilities(): Promise<Capabilities> {
   const res = await apiFetch(`${BASE}/api/capabilities`)
-  if (!res.ok) return { deployer: false, auth: false, ansible: false, fleet: false, services: false, processes: false, logs: false, drift: false, security: false, containers: false }
+  if (!res.ok) return { deployer: false, auth: false, ansible: false, fleet: false, services: false, processes: false, logs: false, drift: false, security: false, containers: false, schedules: false }
   return res.json()
 }
 
@@ -892,4 +893,146 @@ export function parseContainerList(output: string): ContainerInfo[] {
       size: parts[6] ?? '',
     }
   })
+}
+
+// --- Scheduled Automation (Station to Station) ---
+
+export interface Schedule {
+  id: number
+  name: string
+  job_type: 'command' | 'ansible' | 'package_update'
+  config: string
+  target_type: 'all' | 'nodes' | 'tags'
+  target_value: string | null
+  cron_minute: string
+  cron_hour: string
+  cron_dom: string
+  cron_month: string
+  cron_dow: string
+  enabled: boolean
+  last_run: number | null
+  last_status: string | null
+  created_at: number
+  updated_at: number
+}
+
+export interface ScheduleRun {
+  id: number
+  schedule_id: number
+  started_at: number
+  finished_at: number | null
+  status: 'pending' | 'running' | 'ok' | 'failed'
+  output: string | null
+}
+
+export async function fetchSchedules(): Promise<Schedule[]> {
+  const res = await apiFetch(`${BASE}/api/schedules`)
+  if (!res.ok) return []
+  return res.json()
+}
+
+export async function createSchedule(data: Partial<Schedule>): Promise<{ id: number }> {
+  const res = await apiFetch(`${BASE}/api/schedules`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function updateSchedule(id: number, data: Partial<Schedule>): Promise<void> {
+  const res = await apiFetch(`${BASE}/api/schedules/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+}
+
+export async function deleteSchedule(id: number): Promise<void> {
+  const res = await apiFetch(`${BASE}/api/schedules/${id}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+}
+
+export async function toggleSchedule(id: number): Promise<void> {
+  const res = await apiFetch(`${BASE}/api/schedules/${id}/toggle`, { method: 'POST' })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+}
+
+export async function triggerSchedule(id: number): Promise<void> {
+  const res = await apiFetch(`${BASE}/api/schedules/${id}/run`, { method: 'POST' })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(err.error || `HTTP ${res.status}`)
+  }
+}
+
+export async function fetchScheduleRuns(id: number, limit = 20): Promise<ScheduleRun[]> {
+  const res = await apiFetch(`${BASE}/api/schedules/${id}/runs?limit=${limit}`)
+  if (!res.ok) return []
+  return res.json()
+}
+
+export function describeCron(min: string, hour: string, dom: string, month: string, dow: string): string {
+  const dowNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+
+  const isWild = (s: string) => s === '*'
+  const isStep = (s: string) => s.startsWith('*/')
+  const stepVal = (s: string) => parseInt(s.slice(2), 10)
+  const pad = (n: number) => n.toString().padStart(2, '0')
+
+  // Every minute
+  if (isWild(min) && isWild(hour) && isWild(dom) && isWild(month) && isWild(dow)) {
+    return 'Every minute'
+  }
+
+  // Every N minutes
+  if (isStep(min) && isWild(hour) && isWild(dom) && isWild(month) && isWild(dow)) {
+    return `Every ${stepVal(min)} minutes`
+  }
+
+  // Every hour at :MM
+  if (!isWild(min) && !isStep(min) && isWild(hour) && isWild(dom) && isWild(month) && isWild(dow)) {
+    return `Every hour at :${pad(parseInt(min, 10))}`
+  }
+
+  // Every N hours
+  if (min === '0' && isStep(hour) && isWild(dom) && isWild(month) && isWild(dow)) {
+    return `Every ${stepVal(hour)} hours`
+  }
+
+  // Specific time daily
+  if (!isWild(min) && !isStep(min) && !isWild(hour) && !isStep(hour) && isWild(dom) && isWild(month) && isWild(dow)) {
+    return `Every day at ${pad(parseInt(hour, 10))}:${pad(parseInt(min, 10))}`
+  }
+
+  // Specific weekday at time
+  if (!isWild(min) && !isStep(min) && !isWild(hour) && !isStep(hour) && isWild(dom) && isWild(month) && !isWild(dow)) {
+    const d = parseInt(dow, 10)
+    const dayName = dowNames[d] ?? `day ${dow}`
+    return `Every ${dayName} at ${pad(parseInt(hour, 10))}:${pad(parseInt(min, 10))}`
+  }
+
+  // Specific day of month
+  if (!isWild(min) && !isStep(min) && !isWild(hour) && !isStep(hour) && !isWild(dom) && isWild(month) && isWild(dow)) {
+    const d = parseInt(dom, 10)
+    const suffix = d === 1 ? 'st' : d === 2 ? 'nd' : d === 3 ? 'rd' : 'th'
+    return `${d}${suffix} of every month at ${pad(parseInt(hour, 10))}:${pad(parseInt(min, 10))}`
+  }
+
+  // Fallback: raw cron
+  return `${min} ${hour} ${dom} ${month} ${dow}`
 }

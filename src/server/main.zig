@@ -16,6 +16,7 @@ const LogEngine = @import("logs.zig").LogEngine;
 const DriftEngine = @import("drift.zig").DriftEngine;
 const SecurityEngine = @import("security.zig").SecurityEngine;
 const ContainerEngine = @import("containers.zig").ContainerEngine;
+const SchedulerEngine = @import("scheduler.zig").SchedulerEngine;
 const terminal_handler = @import("terminal_handler.zig");
 const embedded_ui = @import("embedded_ui");
 
@@ -226,6 +227,15 @@ pub fn main() !void {
         }
     }
 
+    // Init scheduler engine (requires crypto + db)
+    var scheduler: ?SchedulerEngine = null;
+    if (crypto_engine) |*ce| {
+        if (db) |*d| {
+            scheduler = SchedulerEngine.init(allocator, d, ce);
+            std.log.info("[STATION TO STATION] Scheduler engine: enabled", .{});
+        }
+    }
+
     // Init auth (requires crypto + db)
     var auth: ?Auth = null;
     if (crypto_engine) |ce| {
@@ -286,6 +296,7 @@ pub fn main() !void {
     if (drift) |*d| global_api.setDrift(d);
     if (security) |*s| global_api.setSecurity(s);
     if (containers) |*c| global_api.setContainers(c);
+    if (scheduler) |*s| global_api.setScheduler(s);
     global_api.setWsState(&ws_state);
 
     // Init WebSocket settings
@@ -311,11 +322,26 @@ pub fn main() !void {
         std.log.info("[GROUND CONTROL] Major Tom deployment: disabled (set STARDUST_SECRET)", .{});
     }
 
+    // Start scheduler background thread
+    var scheduler_thread: ?std.Thread = null;
+    if (scheduler) |*s| {
+        scheduler_thread = std.Thread.spawn(.{}, SchedulerEngine.runLoop, .{s}) catch |err| blk: {
+            std.log.warn("[STATION TO STATION] Failed to start scheduler thread: {}", .{err});
+            break :blk null;
+        };
+    }
+
     // This blocks — runs the event loop
     zap.start(.{
         .threads = 2,
         .workers = 1, // single worker for shared state simplicity
     });
+
+    // Shutdown scheduler thread
+    if (scheduler) |*s| {
+        s.running.store(false, .release);
+    }
+    if (scheduler_thread) |t| t.join();
 }
 
 fn parseArgs() Args {

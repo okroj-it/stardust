@@ -8,6 +8,7 @@ import { ProfileModal } from "@/components/profile-modal"
 import { AnsibleModal } from "@/components/ansible-modal"
 import { FleetCommandModal } from "@/components/fleet-command-modal"
 import { DriftModal } from "@/components/drift-modal"
+import { ScheduleManager } from "@/components/schedule-manager"
 import { EventTimeline } from "@/components/event-timeline"
 import { LoginPage } from "@/components/login-page"
 import { isTokenValid, clearToken } from "@/lib/auth"
@@ -22,6 +23,7 @@ import {
   Terminal,
   Tag,
   Shield,
+  Clock,
 } from "lucide-react"
 
 function App() {
@@ -54,6 +56,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
   const [showAnsible, setShowAnsible] = useState(false)
   const [showFleet, setShowFleet] = useState(false)
   const [showDrift, setShowDrift] = useState(false)
+  const [showSchedules, setShowSchedules] = useState(false)
   const [showTimeline, setShowTimeline] = useState(false)
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null)
   const [allTags, setAllTags] = useState<string[]>([])
@@ -171,6 +174,17 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
               >
                 <Shield className="w-4 h-4" />
                 Drift
+              </button>
+            )}
+
+            {capabilities?.schedules && (
+              <button
+                onClick={() => setShowSchedules(true)}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border/50 bg-card/50 text-sm font-medium hover:bg-muted transition-colors"
+                title="Scheduled Automation"
+              >
+                <Clock className="w-4 h-4" />
+                Schedules
               </button>
             )}
 
@@ -317,6 +331,13 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
         <DriftModal
           nodes={nodes}
           onClose={() => setShowDrift(false)}
+        />
+      )}
+
+      {showSchedules && capabilities?.schedules && (
+        <ScheduleManager
+          nodes={nodes}
+          onClose={() => setShowSchedules(false)}
         />
       )}
 

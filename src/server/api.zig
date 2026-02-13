@@ -21,6 +21,8 @@ const security_mod = @import("security.zig");
 const SecurityEngine = security_mod.SecurityEngine;
 const container_mod = @import("containers.zig");
 const ContainerEngine = container_mod.ContainerEngine;
+const scheduler_mod = @import("scheduler.zig");
+const SchedulerEngine = scheduler_mod.SchedulerEngine;
 const common = @import("common");
 
 pub const Api = struct {
@@ -39,6 +41,7 @@ pub const Api = struct {
     drift: ?*DriftEngine = null,
     security: ?*SecurityEngine = null,
     containers: ?*ContainerEngine = null,
+    scheduler: ?*SchedulerEngine = null,
 
     pub fn init(allocator: std.mem.Allocator, store: *Store) Api {
         return .{
@@ -101,6 +104,10 @@ pub const Api = struct {
 
     pub fn setContainers(self: *Api, c: *ContainerEngine) void {
         self.containers = c;
+    }
+
+    pub fn setScheduler(self: *Api, s: *SchedulerEngine) void {
+        self.scheduler = s;
     }
 
     pub fn handleRequest(self: *Api, r: zap.Request) !void {
@@ -187,6 +194,8 @@ pub const Api = struct {
             try self.handleSecurity(r, path);
         } else if (std.mem.startsWith(u8, path, "/api/containers/")) {
             try self.handleContainers(r, path);
+        } else if (std.mem.startsWith(u8, path, "/api/schedules")) {
+            try self.handleSchedules(r, path);
         } else {
             return; // Let static file handler deal with it
         }
@@ -1265,7 +1274,7 @@ pub const Api = struct {
         defer if (ansible_ver != null) self.allocator.free(ver_json);
 
         const resp = std.fmt.allocPrint(self.allocator,
-            \\{{"deployer":{s},"auth":{s},"ansible":{s},"ansible_version":{s},"fleet":{s},"services":{s},"processes":{s},"logs":{s},"drift":{s},"security":{s},"containers":{s}}}
+            \\{{"deployer":{s},"auth":{s},"ansible":{s},"ansible_version":{s},"fleet":{s},"services":{s},"processes":{s},"logs":{s},"drift":{s},"security":{s},"containers":{s},"schedules":{s}}}
         , .{
             if (self.deployer != null) "true" else "false",
             if (self.auth != null) "true" else "false",
@@ -1278,6 +1287,7 @@ pub const Api = struct {
             if (self.drift != null) "true" else "false",
             if (self.security != null) "true" else "false",
             if (self.containers != null) "true" else "false",
+            if (self.scheduler != null) "true" else "false",
         }) catch {
             r.setStatus(.internal_server_error);
             try r.sendJson("{\"error\":\"response serialization failed\"}");
@@ -2748,7 +2758,393 @@ pub const Api = struct {
         defer self.allocator.free(resp);
         try r.sendJson(resp);
     }
+
+    // --- Scheduled Automation (Station to Station) ---
+
+    fn handleSchedules(self: *Api, r: zap.Request, path: []const u8) !void {
+        const sched = self.scheduler orelse {
+            r.setStatus(.service_unavailable);
+            try r.sendJson("{\"error\":\"scheduler not available\"}");
+            return;
+        };
+
+        const method = r.methodAsEnum();
+
+        // GET/POST /api/schedules (no trailing path)
+        if (std.mem.eql(u8, path, "/api/schedules") or std.mem.eql(u8, path, "/api/schedules/")) {
+            if (method == .GET) {
+                try self.handleScheduleList(r);
+            } else if (method == .POST) {
+                try self.handleScheduleCreate(r);
+            } else {
+                r.setStatus(.method_not_allowed);
+                try r.sendJson("{\"error\":\"method not allowed\"}");
+            }
+            return;
+        }
+
+        // Routes with ID: /api/schedules/{id}[/action]
+        const after = path["/api/schedules/".len..];
+        // Parse numeric ID
+        const slash_pos = std.mem.indexOf(u8, after, "/");
+        const id_str = if (slash_pos) |pos| after[0..pos] else after;
+        const id = std.fmt.parseInt(i64, id_str, 10) catch {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"invalid schedule ID\"}");
+            return;
+        };
+        const sub = if (slash_pos) |pos| after[pos + 1 ..] else "";
+
+        if (sub.len == 0) {
+            // GET/PUT/DELETE /api/schedules/{id}
+            if (method == .GET) {
+                try self.handleScheduleGet(r, id);
+            } else if (method == .PUT) {
+                try self.handleScheduleUpdate(r, id);
+            } else if (method == .DELETE) {
+                try self.handleScheduleDelete(r, id);
+            } else {
+                r.setStatus(.method_not_allowed);
+                try r.sendJson("{\"error\":\"method not allowed\"}");
+            }
+        } else if (std.mem.eql(u8, sub, "toggle")) {
+            try self.handleScheduleToggle(r, id);
+        } else if (std.mem.eql(u8, sub, "run")) {
+            try self.handleScheduleRun(r, id, sched);
+        } else if (std.mem.eql(u8, sub, "runs")) {
+            try self.handleScheduleRuns(r, id);
+        } else {
+            r.setStatus(.not_found);
+            try r.sendJson("{\"error\":\"unknown schedule action\"}");
+        }
+    }
+
+    fn handleScheduleList(self: *Api, r: zap.Request) !void {
+        const db = self.db orelse {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"no database\"}");
+            return;
+        };
+        const schedules = db.listSchedules(self.allocator) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"failed to list schedules\"}");
+            return;
+        };
+        defer {
+            for (schedules) |s| s.deinit(self.allocator);
+            self.allocator.free(schedules);
+        }
+
+        var buf: std.ArrayListUnmanaged(u8) = .{};
+        const w = buf.writer(self.allocator);
+        try w.writeByte('[');
+        for (schedules, 0..) |s, i| {
+            if (i > 0) try w.writeByte(',');
+            try self.writeScheduleJson(w, s);
+        }
+        try w.writeByte(']');
+        const json = try buf.toOwnedSlice(self.allocator);
+        defer self.allocator.free(json);
+        try r.sendJson(json);
+    }
+
+    fn handleScheduleGet(self: *Api, r: zap.Request, id: i64) !void {
+        const db = self.db orelse {
+            r.setStatus(.internal_server_error);
+            return;
+        };
+        const schedule = db.getSchedule(self.allocator, id) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"database error\"}");
+            return;
+        };
+        if (schedule == null) {
+            r.setStatus(.not_found);
+            try r.sendJson("{\"error\":\"schedule not found\"}");
+            return;
+        }
+        defer schedule.?.deinit(self.allocator);
+
+        var buf: std.ArrayListUnmanaged(u8) = .{};
+        const w = buf.writer(self.allocator);
+        try self.writeScheduleJson(w, schedule.?);
+        const json = try buf.toOwnedSlice(self.allocator);
+        defer self.allocator.free(json);
+        try r.sendJson(json);
+    }
+
+    fn handleScheduleCreate(self: *Api, r: zap.Request) !void {
+        const db = self.db orelse {
+            r.setStatus(.internal_server_error);
+            return;
+        };
+        const body = r.body orelse {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"missing body\"}");
+            return;
+        };
+        const parsed = std.json.parseFromSlice(ScheduleCreateRequest, self.allocator, body, .{
+            .ignore_unknown_fields = true,
+            .allocate = .alloc_always,
+        }) catch {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"invalid JSON\"}");
+            return;
+        };
+        defer parsed.deinit();
+        const req = parsed.value;
+
+        // Validate job type
+        if (!isValidJobType(req.job_type)) {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"invalid job_type\"}");
+            return;
+        }
+        // Validate target type
+        if (!isValidTargetType(req.target_type)) {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"invalid target_type\"}");
+            return;
+        }
+
+        const id = db.insertSchedule(
+            req.name,
+            req.job_type,
+            req.config,
+            req.target_type,
+            req.target_value,
+            req.cron_minute,
+            req.cron_hour,
+            req.cron_dom,
+            req.cron_month,
+            req.cron_dow,
+            req.enabled,
+        ) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"failed to create schedule\"}");
+            return;
+        };
+
+        // Record event
+        if (self.db) |edb| {
+            var msg_buf: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(&msg_buf, "Created schedule '{s}' ({s})", .{
+                if (req.name.len > 60) req.name[0..60] else req.name,
+                req.job_type,
+            }) catch "Schedule created";
+            edb.insertEvent("schedule.created", null, msg, null);
+        }
+
+        const resp = std.fmt.allocPrint(self.allocator, "{{\"id\":{d}}}", .{id}) catch {
+            r.setStatus(.internal_server_error);
+            return;
+        };
+        defer self.allocator.free(resp);
+        r.setStatus(.created);
+        try r.sendJson(resp);
+    }
+
+    fn handleScheduleUpdate(self: *Api, r: zap.Request, id: i64) !void {
+        const db = self.db orelse {
+            r.setStatus(.internal_server_error);
+            return;
+        };
+        const body = r.body orelse {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"missing body\"}");
+            return;
+        };
+        const parsed = std.json.parseFromSlice(ScheduleCreateRequest, self.allocator, body, .{
+            .ignore_unknown_fields = true,
+            .allocate = .alloc_always,
+        }) catch {
+            r.setStatus(.bad_request);
+            try r.sendJson("{\"error\":\"invalid JSON\"}");
+            return;
+        };
+        defer parsed.deinit();
+        const req = parsed.value;
+
+        db.updateSchedule(id, req.name, req.job_type, req.config, req.target_type, req.target_value, req.cron_minute, req.cron_hour, req.cron_dom, req.cron_month, req.cron_dow) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"failed to update schedule\"}");
+            return;
+        };
+
+        try r.sendJson("{\"ok\":true}");
+    }
+
+    fn handleScheduleDelete(self: *Api, r: zap.Request, id: i64) !void {
+        const db = self.db orelse {
+            r.setStatus(.internal_server_error);
+            return;
+        };
+        db.deleteSchedule(id) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"failed to delete schedule\"}");
+            return;
+        };
+        try r.sendJson("{\"ok\":true}");
+    }
+
+    fn handleScheduleToggle(self: *Api, r: zap.Request, id: i64) !void {
+        const db = self.db orelse {
+            r.setStatus(.internal_server_error);
+            return;
+        };
+        // Get current state
+        const schedule = db.getSchedule(self.allocator, id) catch {
+            r.setStatus(.internal_server_error);
+            return;
+        };
+        if (schedule == null) {
+            r.setStatus(.not_found);
+            try r.sendJson("{\"error\":\"schedule not found\"}");
+            return;
+        }
+        defer schedule.?.deinit(self.allocator);
+
+        db.setScheduleEnabled(id, !schedule.?.enabled) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"failed to toggle schedule\"}");
+            return;
+        };
+
+        const resp = std.fmt.allocPrint(self.allocator, "{{\"enabled\":{s}}}", .{
+            if (!schedule.?.enabled) "true" else "false",
+        }) catch {
+            r.setStatus(.internal_server_error);
+            return;
+        };
+        defer self.allocator.free(resp);
+        try r.sendJson(resp);
+    }
+
+    fn handleScheduleRun(self: *Api, r: zap.Request, id: i64, sched: *SchedulerEngine) !void {
+        const db = self.db orelse {
+            r.setStatus(.internal_server_error);
+            return;
+        };
+        const schedule = db.getSchedule(self.allocator, id) catch {
+            r.setStatus(.internal_server_error);
+            return;
+        };
+        if (schedule == null) {
+            r.setStatus(.not_found);
+            try r.sendJson("{\"error\":\"schedule not found\"}");
+            return;
+        }
+        defer schedule.?.deinit(self.allocator);
+
+        // Fire execution in a detached thread so the API returns immediately
+        const s_copy = self.allocator.dupe(u8, std.mem.asBytes(&schedule.?)) catch {
+            r.setStatus(.internal_server_error);
+            return;
+        };
+        _ = s_copy;
+
+        // Execute synchronously for now (simple approach)
+        sched.executeSchedule(schedule.?, std.time.timestamp());
+
+        try r.sendJson("{\"ok\":true}");
+    }
+
+    fn handleScheduleRuns(self: *Api, r: zap.Request, id: i64) !void {
+        const db = self.db orelse {
+            r.setStatus(.internal_server_error);
+            return;
+        };
+        r.parseQuery();
+        const limit_str = r.getParamSlice("limit");
+        const limit = if (limit_str) |s| std.fmt.parseInt(i64, s, 10) catch @as(i64, 20) else @as(i64, 20);
+
+        const runs = db.listScheduleRuns(self.allocator, id, limit) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"failed to list runs\"}");
+            return;
+        };
+        defer {
+            for (runs) |run| run.deinit(self.allocator);
+            self.allocator.free(runs);
+        }
+
+        var buf: std.ArrayListUnmanaged(u8) = .{};
+        const w = buf.writer(self.allocator);
+        try w.writeByte('[');
+        for (runs, 0..) |run, i| {
+            if (i > 0) try w.writeByte(',');
+            const out_escaped = if (run.output) |o| jsonEscape(self.allocator, o) catch null else null;
+            defer if (out_escaped) |e| self.allocator.free(e);
+
+            try w.print("{{\"id\":{d},\"schedule_id\":{d},\"started_at\":{d},", .{ run.id, run.schedule_id, run.started_at });
+            if (run.finished_at) |f| {
+                try w.print("\"finished_at\":{d},", .{f});
+            } else {
+                try w.writeAll("\"finished_at\":null,");
+            }
+            try w.print("\"status\":\"{s}\",", .{run.status});
+            if (out_escaped) |o| {
+                try w.print("\"output\":\"{s}\"}}", .{o});
+            } else {
+                try w.writeAll("\"output\":null}");
+            }
+        }
+        try w.writeByte(']');
+        const json = try buf.toOwnedSlice(self.allocator);
+        defer self.allocator.free(json);
+        try r.sendJson(json);
+    }
+
+    fn writeScheduleJson(self: *Api, w: anytype, s: @import("db.zig").ScheduleRecord) !void {
+        const name_escaped = jsonEscape(self.allocator, s.name) catch return;
+        defer self.allocator.free(name_escaped);
+        const config_escaped = jsonEscape(self.allocator, s.config) catch return;
+        defer self.allocator.free(config_escaped);
+
+        try w.print("{{\"id\":{d},\"name\":\"{s}\",\"job_type\":\"{s}\",\"config\":\"{s}\",", .{
+            s.id, name_escaped, s.job_type, config_escaped,
+        });
+        try w.print("\"target_type\":\"{s}\",", .{s.target_type});
+        if (s.target_value) |tv| {
+            const tv_esc = jsonEscape(self.allocator, tv) catch return;
+            defer self.allocator.free(tv_esc);
+            try w.print("\"target_value\":\"{s}\",", .{tv_esc});
+        } else {
+            try w.writeAll("\"target_value\":null,");
+        }
+        try w.print("\"cron_minute\":\"{s}\",\"cron_hour\":\"{s}\",\"cron_dom\":\"{s}\",\"cron_month\":\"{s}\",\"cron_dow\":\"{s}\",", .{
+            s.cron_minute, s.cron_hour, s.cron_dom, s.cron_month, s.cron_dow,
+        });
+        try w.print("\"enabled\":{s},", .{if (s.enabled) "true" else "false"});
+        if (s.last_run) |lr| {
+            try w.print("\"last_run\":{d},", .{lr});
+        } else {
+            try w.writeAll("\"last_run\":null,");
+        }
+        if (s.last_status) |ls| {
+            try w.print("\"last_status\":\"{s}\",", .{ls});
+        } else {
+            try w.writeAll("\"last_status\":null,");
+        }
+        try w.print("\"created_at\":{d},\"updated_at\":{d}}}", .{ s.created_at, s.updated_at });
+    }
 };
+
+fn isValidJobType(t: []const u8) bool {
+    const valid = [_][]const u8{ "command", "ansible", "package_update" };
+    for (valid) |v| {
+        if (std.mem.eql(u8, t, v)) return true;
+    }
+    return false;
+}
+
+fn isValidTargetType(t: []const u8) bool {
+    const valid = [_][]const u8{ "all", "nodes", "tags" };
+    for (valid) |v| {
+        if (std.mem.eql(u8, t, v)) return true;
+    }
+    return false;
+}
 
 const DriftSnapshotRequest = struct {
     node_ids: []const []const u8,
@@ -3001,6 +3397,22 @@ const ServiceActionRequest = struct {
 const ProcessKillRequest = struct {
     pid: u32,
     signal: u8 = 15,
+};
+
+// --- Scheduled Automation ---
+
+const ScheduleCreateRequest = struct {
+    name: []const u8,
+    job_type: []const u8,
+    config: []const u8,
+    target_type: []const u8,
+    target_value: ?[]const u8 = null,
+    cron_minute: []const u8 = "*",
+    cron_hour: []const u8 = "*",
+    cron_dom: []const u8 = "*",
+    cron_month: []const u8 = "*",
+    cron_dow: []const u8 = "*",
+    enabled: bool = true,
 };
 
 // --- Container Manager ---
