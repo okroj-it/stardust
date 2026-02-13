@@ -156,6 +156,8 @@ pub const Api = struct {
             try self.handleChangePassword(r);
         } else if (std.mem.eql(u8, path, "/api/tags")) {
             try self.handleTags(r);
+        } else if (std.mem.eql(u8, path, "/api/events")) {
+            try self.handleEvents(r);
         } else if (std.mem.eql(u8, path, "/api/nodes/check")) {
             try self.handleNodeCheck(r);
         } else if (std.mem.eql(u8, path, "/api/nodes")) {
@@ -843,9 +845,18 @@ pub const Api = struct {
 
         r.setStatus(.created);
         try r.sendJson(resp);
+
+        // Record event
+        if (self.db) |edb| {
+            edb.insertEvent("node.added", &node_id, req.name, null);
+        }
     }
 
     fn deleteNode(self: *Api, r: zap.Request, node_id: []const u8) !void {
+        // Record event before deletion (so we still have the node_id)
+        if (self.db) |db| {
+            db.insertEvent("node.removed", node_id, "Node removed", null);
+        }
         // Always delete from DB, regardless of SSH undeploy result
         if (self.db) |db| {
             db.deleteNode(node_id) catch {};
@@ -995,8 +1006,13 @@ pub const Api = struct {
             deployer.stepUploadBinary(node_id)
         else if (std.mem.eql(u8, step, "install"))
             deployer.stepInstallService(node_id)
-        else if (std.mem.eql(u8, step, "start"))
-            deployer.stepStartService(node_id)
+        else if (std.mem.eql(u8, step, "start")) blk: {
+            const sr = deployer.stepStartService(node_id);
+            if (sr.ok) {
+                if (self.db) |edb| edb.insertEvent("deploy.started", node_id, "Spider deployed", null);
+            }
+            break :blk sr;
+        }
         else if (std.mem.eql(u8, step, "connect"))
             deployer.stepConnect(node_id)
         else if (std.mem.eql(u8, step, "stop"))
@@ -1297,6 +1313,81 @@ pub const Api = struct {
         try r.sendJson(buf.items);
     }
 
+    // --- Events ---
+
+    fn handleEvents(self: *Api, r: zap.Request) !void {
+        if (r.methodAsEnum() != .GET) {
+            r.setStatus(.method_not_allowed);
+            try r.sendJson("{\"error\":\"method not allowed\"}");
+            return;
+        }
+        const db = self.db orelse {
+            try r.sendJson("[]");
+            return;
+        };
+
+        r.parseQuery();
+        const node_id = r.getParamSlice("node_id");
+        const event_type = r.getParamSlice("type");
+        const limit_str = r.getParamSlice("limit") orelse "50";
+        const before_str = r.getParamSlice("before");
+
+        var limit = std.fmt.parseInt(i64, limit_str, 10) catch 50;
+        if (limit > 200) limit = 200;
+        if (limit < 1) limit = 50;
+
+        const before_id: ?i64 = if (before_str) |s| std.fmt.parseInt(i64, s, 10) catch null else null;
+
+        const events = db.listEvents(self.allocator, node_id, event_type, limit, before_id) catch {
+            r.setStatus(.internal_server_error);
+            try r.sendJson("{\"error\":\"database error\"}");
+            return;
+        };
+        defer {
+            for (events) |e| e.deinit(self.allocator);
+            self.allocator.free(events);
+        }
+
+        var buf: std.ArrayListUnmanaged(u8) = .{};
+        defer buf.deinit(self.allocator);
+        const w = buf.writer(self.allocator);
+        try w.writeByte('[');
+        for (events, 0..) |evt, i| {
+            if (i > 0) try w.writeByte(',');
+            try w.writeAll("{\"id\":");
+            try std.fmt.format(w, "{d}", .{evt.id});
+            try w.writeAll(",\"created_at\":");
+            try std.fmt.format(w, "{d}", .{evt.created_at});
+            try w.writeAll(",\"event_type\":\"");
+            try w.writeAll(evt.event_type);
+            try w.writeAll("\",\"node_id\":");
+            if (evt.node_id) |nid| {
+                try w.writeByte('"');
+                try w.writeAll(nid);
+                try w.writeByte('"');
+            } else {
+                try w.writeAll("null");
+            }
+            try w.writeAll(",\"message\":\"");
+            const escaped_msg = jsonEscape(self.allocator, evt.message) catch "";
+            defer if (escaped_msg.len > 0) self.allocator.free(escaped_msg);
+            try w.writeAll(escaped_msg);
+            try w.writeAll("\",\"detail\":");
+            if (evt.detail) |d| {
+                try w.writeByte('"');
+                const escaped_det = jsonEscape(self.allocator, d) catch "";
+                defer if (escaped_det.len > 0) self.allocator.free(escaped_det);
+                try w.writeAll(escaped_det);
+                try w.writeByte('"');
+            } else {
+                try w.writeAll("null");
+            }
+            try w.writeByte('}');
+        }
+        try w.writeByte(']');
+        try r.sendJson(buf.items);
+    }
+
     // --- Ansible ---
 
     fn handleAnsible(self: *Api, r: zap.Request, path: []const u8) !void {
@@ -1364,6 +1455,14 @@ pub const Api = struct {
             try r.sendJson("{\"error\":\"failed to start playbook\"}");
             return;
         };
+
+        // Record event
+        if (self.db) |edb| {
+            const node_count = if (req.nodes) |n| n.len else 0;
+            var msg_buf: [128]u8 = undefined;
+            const msg = std.fmt.bufPrint(&msg_buf, "Ansible playbook executed on {d} nodes", .{node_count}) catch "Ansible playbook executed";
+            edb.insertEvent("ansible.run", null, msg, null);
+        }
 
         const resp = std.fmt.allocPrint(self.allocator,
             \\{{"job_id":"{s}"}}
@@ -1482,6 +1581,14 @@ pub const Api = struct {
             try r.sendJson("{\"error\":\"failed to start fleet command\"}");
             return;
         };
+
+        // Record event
+        if (self.db) |edb| {
+            var msg_buf: [256]u8 = undefined;
+            const cmd_preview = if (req.command.len > 60) req.command[0..60] else req.command;
+            const msg = std.fmt.bufPrint(&msg_buf, "Fleet: '{s}' on {d} nodes", .{ cmd_preview, req.node_ids.len }) catch "Fleet command executed";
+            edb.insertEvent("fleet.command", null, msg, null);
+        }
 
         const resp = std.fmt.allocPrint(self.allocator, "{{\"job_id\":\"{s}\"}}", .{job_id}) catch {
             try r.sendJson("{\"error\":\"response serialization failed\"}");
@@ -1716,6 +1823,15 @@ pub const Api = struct {
         const result = engine.serviceAction(node_id, req.name, req.action, scope);
         defer if (result.output.len > 0) self.allocator.free(result.output);
 
+        // Record event
+        if (result.ok) {
+            if (self.db) |edb| {
+                var msg_buf: [128]u8 = undefined;
+                const msg = std.fmt.bufPrint(&msg_buf, "{s} service '{s}' ({s})", .{ req.action, req.name, req.scope }) catch "Service action";
+                edb.insertEvent("service.action", node_id, msg, null);
+            }
+        }
+
         const escaped = jsonEscape(self.allocator, result.output) catch {
             r.setStatus(.internal_server_error);
             try r.sendJson("{\"error\":\"response serialization failed\"}");
@@ -1827,6 +1943,14 @@ pub const Api = struct {
             return;
         };
         defer self.allocator.free(escaped);
+
+        if (result.ok) {
+            if (self.db) |edb| {
+                var msg_buf: [128]u8 = undefined;
+                const msg = std.fmt.bufPrint(&msg_buf, "Signal {d} sent to PID {d}", .{ req.signal, req.pid }) catch "Process signal sent";
+                edb.insertEvent("process.signal", node_id, msg, null);
+            }
+        }
 
         const resp = std.fmt.allocPrint(self.allocator,
             \\{{"ok":{s},"output":"{s}"}}
@@ -2130,6 +2254,13 @@ pub const Api = struct {
         }
 
         w.writeAll("]}") catch {};
+
+        if (self.db) |edb| {
+            var msg_buf: [128]u8 = undefined;
+            const msg = std.fmt.bufPrint(&msg_buf, "Drift snapshot taken for {d} node(s)", .{req.node_ids.len}) catch "Drift snapshot taken";
+            edb.insertEvent("drift.snapshot", null, msg, null);
+        }
+
         const resp = buf.toOwnedSlice(self.allocator) catch {
             r.setStatus(.internal_server_error);
             try r.sendJson("{\"error\":\"allocation failed\"}");
@@ -2389,6 +2520,12 @@ pub const Api = struct {
             defer self.allocator.free(err_resp);
             try r.sendJson(err_resp);
             return;
+        }
+
+        if (self.db) |edb| {
+            var msg_buf: [128]u8 = undefined;
+            const msg = std.fmt.bufPrint(&msg_buf, "Security scan completed (score: {d})", .{result.score}) catch "Security scan completed";
+            edb.insertEvent("security.scan", node_id, msg, null);
         }
 
         const resp = std.fmt.allocPrint(self.allocator,

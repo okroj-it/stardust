@@ -770,6 +770,33 @@ export async function stopLogStream(nodeId: string, jobId: string): Promise<void
   })
 }
 
+// --- Event Timeline ---
+
+export interface TimelineEvent {
+  id: number
+  created_at: number
+  event_type: string
+  node_id: string | null
+  message: string
+  detail: string | null
+}
+
+export async function fetchEvents(params?: {
+  node_id?: string
+  type?: string
+  limit?: number
+  before?: number
+}): Promise<TimelineEvent[]> {
+  const qs = new URLSearchParams()
+  if (params?.node_id) qs.set('node_id', params.node_id)
+  if (params?.type) qs.set('type', params.type)
+  if (params?.limit) qs.set('limit', String(params.limit))
+  if (params?.before) qs.set('before', String(params.before))
+  const res = await apiFetch(`${BASE}/api/events?${qs}`)
+  if (!res.ok) return []
+  return res.json()
+}
+
 // --- Security Posture ---
 
 export interface SecurityScanResult {

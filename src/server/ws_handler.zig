@@ -1,14 +1,9 @@
 const std = @import("std");
 const zap = @import("zap");
+const fio = zap.fio;
 const common = @import("common");
 const Store = @import("store.zig").Store;
 const Db = @import("db.zig").Db;
-
-/// Per-connection WebSocket context.
-const ConnContext = struct {
-    agent_id: ?[]const u8 = null,
-    authenticated: bool = false,
-};
 
 /// Global state shared across all WebSocket connections.
 pub const WsState = struct {
@@ -17,6 +12,8 @@ pub const WsState = struct {
     db: ?*Db = null,
     /// Valid tokens: agent_id → token
     valid_tokens: std.StringHashMap([]const u8),
+    /// WebSocket uuid → agent_id (for disconnect tracking)
+    connections: std.AutoHashMap(isize, []const u8),
     mu: std.Thread.Mutex = .{},
 
     pub fn init(allocator: std.mem.Allocator, store: *Store) WsState {
@@ -24,10 +21,17 @@ pub const WsState = struct {
             .allocator = allocator,
             .store = store,
             .valid_tokens = std.StringHashMap([]const u8).init(allocator),
+            .connections = std.AutoHashMap(isize, []const u8).init(allocator),
         };
     }
 
     pub fn deinit(self: *WsState) void {
+        var conn_it = self.connections.iterator();
+        while (conn_it.next()) |entry| {
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.connections.deinit();
+
         var it = self.valid_tokens.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
@@ -129,6 +133,26 @@ fn handleAuth(state: *WsState, handle: WsHandle, message: []const u8) !void {
     if (state.validateToken(agent_id, token)) {
         std.log.info("[GROUND CONTROL] Signal received from Spider '{s}'", .{agent_id});
 
+        // Track connection for disconnect event
+        const uuid = fio.websocket_uuid(handle);
+        {
+            state.mu.lock();
+            defer state.mu.unlock();
+            if (state.connections.fetchRemove(uuid)) |old| {
+                state.allocator.free(old.value);
+            }
+            const id_copy = state.allocator.dupe(u8, agent_id) catch return;
+            state.connections.put(uuid, id_copy) catch {
+                state.allocator.free(id_copy);
+                return;
+            };
+        }
+
+        // Record connect event
+        if (state.db) |db| {
+            db.insertEvent("node.connected", agent_id, "Spider connected", null);
+        }
+
         const now = std.time.milliTimestamp();
         var buf: [256]u8 = undefined;
         const resp = std.fmt.bufPrint(&buf,
@@ -158,9 +182,23 @@ fn handleStats(state: *WsState, _: WsHandle, message: []const u8) !void {
 }
 
 fn onClose(state: ?*WsState, uuid: isize) !void {
-    _ = state;
-    _ = uuid;
-    std.log.info("[GROUND CONTROL] Signal lost", .{});
+    const ws_state = state orelse return;
+
+    ws_state.mu.lock();
+    const removed = ws_state.connections.fetchRemove(uuid);
+    ws_state.mu.unlock();
+
+    if (removed) |kv| {
+        const agent_id = kv.value;
+        defer ws_state.allocator.free(agent_id);
+        ws_state.store.setDisconnected(agent_id);
+        if (ws_state.db) |db| {
+            db.insertEvent("node.disconnected", agent_id, "Spider disconnected", null);
+        }
+        std.log.info("[GROUND CONTROL] Signal lost from Spider '{s}'", .{agent_id});
+    } else {
+        std.log.info("[GROUND CONTROL] Signal lost (unauthenticated)", .{});
+    }
 }
 
 const AuthMsg = struct {

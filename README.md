@@ -7,7 +7,7 @@
 <p align="center">
   <em>A lightweight server monitoring & orchestration platform built in Zig.<br/>
   Deploy zero-dependency agents to your Linux fleet, collect real-time telemetry over WebSockets,<br/>
-  tag and group nodes, open interactive SSH terminals, run fleet-wide commands, manage packages and systemd services, explore processes with kill signals, stream logs in real time, audit security posture with scoring, execute Ansible playbooks, detect configuration drift, and export Prometheus metrics — all from a single binary and a clean React dashboard.</em>
+  tag and group nodes, open interactive SSH terminals, run fleet-wide commands, manage packages and systemd services, explore processes with kill signals, stream logs in real time, audit security posture with scoring, execute Ansible playbooks, detect configuration drift, track every action in an event timeline, and export Prometheus metrics — all from a single binary and a clean React dashboard.</em>
 </p>
 
 <p align="center">
@@ -43,6 +43,7 @@ Every component draws from David Bowie's *Space Oddity* and *Ziggy Stardust* myt
 | Process Explorer | **Ashes to Ashes** | Browser-based process viewer with kill signals | *"Ashes to ashes, funk to funky"* |
 | Log Streaming | **Sound and Vision** | Real-time log tailing (journalctl & files) | *"Don't you wonder sometimes, 'bout sound and vision?"* |
 | Security Posture | **Heroes** | Per-node security audit with scoring | *"We can be heroes, just for one day"* |
+| Event Timeline | **Changes** | Audit trail for every action and connection event | *"Ch-ch-ch-ch-Changes, turn and face the strange"* |
 | Ansible | **Ziggy** | Optional Ansible orchestration engine | *"Ziggy played guitar"* |
 
 ---
@@ -71,7 +72,7 @@ Every component draws from David Bowie's *Space Oddity* and *Ziggy Stardust* myt
                     ┌────────▼─────────┐       ┌─────────────────┐
                     │  SQLite (zqlite) │       │    Ansible       │
                     │  nodes, users,   │       │  (optional)      │
-                    │  credentials     │       │  galaxy + plays  │
+                    │  creds, events   │       │  galaxy + plays  │
                     └──────────────────┘       └─────────────────┘
 ```
 
@@ -190,6 +191,17 @@ Spiders auto-detect and report: **OS** (name, version, ID), **kernel**, **archit
 - **Auto-update status** — Detects whether unattended-upgrades (Debian/Ubuntu) or dnf-automatic (RHEL/Fedora) is installed and enabled
 - **Overview dashboard** — Score ring visualization, clickable summary cards for each category, and port badges
 - **Tabbed detail views** — Packages table, SSH config cards with status badges, firewall rules display, and auto-update configuration
+
+### Event Timeline (Changes)
+
+- **Comprehensive audit trail** — Every meaningful action is recorded: Spider connect/disconnect, node add/remove, deployments, fleet commands, Ansible runs, service actions, process signals, drift snapshots, and security scans
+- **Global timeline** — View all events across the fleet from the header Timeline button, with type-based icons and color coding
+- **Per-node timeline** — Open filtered event history from any node's detail panel
+- **Event type filtering** — Dropdown filter to focus on specific event categories (connected, disconnected, deploy, fleet, ansible, service, process, drift, security)
+- **Cursor-based pagination** — "Load more" button fetches older events without duplicates or shifting pages
+- **Auto-refresh** — New events appear automatically via 10-second polling
+- **Auto-prune** — Events older than 30 days are cleaned up on server startup
+- **Fire-and-forget recording** — Event insertion never blocks or fails the primary action
 
 ### Ansible Integration (Ziggy)
 
@@ -541,6 +553,14 @@ Package actions: `check-updates`, `upgrade`, `full-upgrade`, `list-installed`, `
 | `POST` | `/api/drift/diff` | Compare snapshots `{snapshot_a, snapshot_b?}` or `{snapshot_a, baseline: true}` |
 | `DELETE` | `/api/drift/snapshot/:id` | Delete a snapshot |
 
+### Event Timeline (Changes)
+
+| Method | Endpoint | Description |
+|:-------|:---------|:------------|
+| `GET` | `/api/events?node_id=X&type=Y&limit=50&before=123` | List events (paginated, filterable by node and type) |
+
+Event types: `node.connected`, `node.disconnected`, `node.added`, `node.removed`, `deploy.started`, `fleet.command`, `ansible.run`, `service.action`, `process.signal`, `drift.snapshot`, `security.scan`
+
 ### Ansible
 
 | Method | Endpoint | Description |
@@ -645,6 +665,7 @@ stardust/
 │       │   ├── process-explorer.tsx # Process viewer/killer (Ashes to Ashes)
 │       │   ├── log-viewer.tsx     # Log streamer (Sound and Vision)
 │       │   ├── security-posture.tsx # Security scanner (Heroes)
+│       │   ├── event-timeline.tsx  # Event timeline (Changes)
 │       │   ├── ansible-modal.tsx   # Playbook runner
 │       │   ├── login-page.tsx
 │       │   └── profile-modal.tsx

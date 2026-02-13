@@ -133,6 +133,19 @@ pub const Db = struct {
             \\)
         );
 
+        try conn.execNoArgs(
+            \\CREATE TABLE IF NOT EXISTS events (
+            \\    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            \\    created_at INTEGER NOT NULL,
+            \\    event_type TEXT NOT NULL,
+            \\    node_id    TEXT,
+            \\    message    TEXT NOT NULL,
+            \\    detail     TEXT
+            \\)
+        );
+        conn.execNoArgs("CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at DESC)") catch {};
+        conn.execNoArgs("CREATE INDEX IF NOT EXISTS idx_events_node ON events(node_id)") catch {};
+
         // Migration: add sudo columns if missing (for existing DBs)
         conn.execNoArgs("ALTER TABLE nodes ADD COLUMN sudo_pass_enc BLOB") catch {};
         conn.execNoArgs("ALTER TABLE nodes ADD COLUMN sudo_pass_nonce BLOB") catch {};
@@ -148,6 +161,10 @@ pub const Db = struct {
         conn.execNoArgs("ALTER TABLE nodes ADD COLUMN cpu_cores INTEGER") catch {};
         conn.execNoArgs("ALTER TABLE nodes ADD COLUMN total_ram INTEGER") catch {};
         conn.execNoArgs("ALTER TABLE nodes ADD COLUMN pkg_manager TEXT") catch {};
+
+        // Prune events older than 30 days
+        const cutoff = std.time.timestamp() - 30 * 86400;
+        conn.exec("DELETE FROM events WHERE created_at < ?1", .{cutoff}) catch {};
 
         return .{ .conn = conn };
     }
@@ -575,5 +592,58 @@ pub const Db = struct {
     /// Delete a drift snapshot.
     pub fn deleteDriftSnapshot(self: *Db, id: i64) !void {
         try self.conn.exec("DELETE FROM drift_snapshots WHERE id = ?1", .{id});
+    }
+
+    // --- Events ---
+
+    /// Insert an event (fire-and-forget: logs errors, never fails the caller).
+    pub fn insertEvent(self: *Db, event_type: []const u8, node_id: ?[]const u8, message: []const u8, detail: ?[]const u8) void {
+        self.conn.exec(
+            "INSERT INTO events (created_at, event_type, node_id, message, detail) VALUES (?1, ?2, ?3, ?4, ?5)",
+            .{ std.time.timestamp(), event_type, node_id, message, detail },
+        ) catch |err| {
+            std.log.warn("[CHANGES] Failed to record event: {}", .{err});
+        };
+    }
+
+    /// List events with optional filters and cursor-based pagination.
+    pub fn listEvents(self: *Db, allocator: std.mem.Allocator, node_id: ?[]const u8, event_type: ?[]const u8, limit: i64, before_id: ?i64) ![]EventRecord {
+        var rows = try self.conn.rows(
+            \\SELECT id, created_at, event_type, node_id, message, detail FROM events
+            \\WHERE (?1 IS NULL OR node_id = ?1)
+            \\  AND (?2 IS NULL OR event_type = ?2)
+            \\  AND (?3 IS NULL OR id < ?3)
+            \\ORDER BY id DESC LIMIT ?4
+        , .{ node_id, event_type, before_id, limit });
+        defer rows.deinit();
+
+        var result: std.ArrayListUnmanaged(EventRecord) = .{};
+        while (rows.next()) |row| {
+            try result.append(allocator, EventRecord{
+                .id = row.int(0),
+                .created_at = row.int(1),
+                .event_type = try allocator.dupe(u8, row.text(2)),
+                .node_id = if (row.nullableText(3)) |v| try allocator.dupe(u8, v) else null,
+                .message = try allocator.dupe(u8, row.text(4)),
+                .detail = if (row.nullableText(5)) |v| try allocator.dupe(u8, v) else null,
+            });
+        }
+        return try result.toOwnedSlice(allocator);
+    }
+};
+
+pub const EventRecord = struct {
+    id: i64,
+    created_at: i64,
+    event_type: []const u8,
+    node_id: ?[]const u8,
+    message: []const u8,
+    detail: ?[]const u8,
+
+    pub fn deinit(self: EventRecord, allocator: std.mem.Allocator) void {
+        allocator.free(self.event_type);
+        if (self.node_id) |v| allocator.free(v);
+        allocator.free(self.message);
+        if (self.detail) |v| allocator.free(v);
     }
 };

@@ -10,6 +10,7 @@ import { ServiceManager } from "./service-manager"
 import { ProcessExplorer } from "./process-explorer"
 import { LogViewer } from "./log-viewer"
 import { SecurityPosture } from "./security-posture"
+import { EventTimeline } from "./event-timeline"
 import type { NodeStatus, Capabilities } from "@/lib/api"
 import { deployStep, updateNodeTags, fetchAllTags } from "@/lib/api"
 import {
@@ -54,6 +55,7 @@ export function NodeDetail({ node, onClose, onRemove, onTagsChanged, capabilitie
   const [showProcesses, setShowProcesses] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
   const [showSecurity, setShowSecurity] = useState(false)
+  const [showEvents, setShowEvents] = useState(false)
 
   const cpuHistory = history.map((h) => h.cpu.usage_percent)
   const memHistory = history.map((h) => h.memory.used_percent)
@@ -127,6 +129,13 @@ export function NodeDetail({ node, onClose, onRemove, onTagsChanged, capabilitie
               <Shield className="w-4 h-4" />
             </button>
           )}
+          <button
+            onClick={() => setShowEvents(true)}
+            className="p-2 rounded-lg hover:bg-amber-500/10 text-muted-foreground hover:text-amber-400 transition-colors"
+            title="Event History"
+          >
+            <Clock className="w-4 h-4" />
+          </button>
           {node.connected && (
             <button
               onClick={() => setShowShell(true)}
@@ -390,6 +399,13 @@ export function NodeDetail({ node, onClose, onRemove, onTagsChanged, capabilitie
         <ReinstallDialog
           nodeId={nodeId}
           onClose={() => setShowReinstall(false)}
+        />
+      )}
+
+      {showEvents && (
+        <EventTimeline
+          nodeId={nodeId}
+          onClose={() => setShowEvents(false)}
         />
       )}
     </div>
