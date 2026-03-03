@@ -60,16 +60,16 @@ Every component draws from David Bowie's *Space Oddity* and *Ziggy Stardust* myt
 ## Architecture
 
 ```mermaid
-graph TB
+graph LR
     capsule["The Capsule<br/>React 19 + xterm.js"]
     gc["Ground Control<br/>Zig + zap"]
     spider["Spider · per node<br/>zero-dep static binary"]
-    db[("SQLite · zqlite<br/>nodes · users · creds<br/>schedules · events")]
+    db[("SQLite · zqlite")]
     ansible["Ansible · optional"]
 
     capsule -->|"HTTPS + WSS"| gc
-    gc <-->|"WebSocket TLS — real-time telemetry"| spider
-    gc -->|"SSH — deploy · terminal · fleet · services<br/>processes · logs · security · containers · cron"| spider
+    gc <-->|"WebSocket TLS"| spider
+    gc -->|"SSH"| spider
     gc --> db
     gc -.-> ansible
 ```
