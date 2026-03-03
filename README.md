@@ -59,33 +59,19 @@ Every component draws from David Bowie's *Space Oddity* and *Ziggy Stardust* myt
 
 ## Architecture
 
-```
-                    ┌──────────────────┐
-                    │   The Capsule    │
-                    │  React + xterm   │
-                    └────────┬─────────┘
-                             │ HTTPS + WSS
-                             ▼
-                    ┌──────────────────┐       WebSocket (TLS)       ┌─────────────┐
-                    │  Ground Control  │◄──────────────────────────►│   Spider     │
-                    │    Zig + zap     │                             │  (per node)  │
-                    │                  │──── SSH (Major Tom) ────►  │  zero-dep    │
-                    │                  │──── SSH PTY (Oddity) ───►  │              │
-                    │                  │──── SSH (Starman) ────►  │              │
-                    │                  │──── SSH (Life on Mars)─►  │              │
-                    │                  │──── SSH (Ashes) ───────►  │              │
-                    │                  │──── SSH (Sound&Vision)─►  │              │
-                    │                  │──── SSH (Heroes) ──────►  │              │
-                    │                  │──── SSH (Suffragette)──►  │              │
-                    │                  │──── SSH (Station)────►  │              │
-                    └────────┬─────────┘                             └─────────────┘
-                             │
-                    ┌────────▼─────────┐       ┌─────────────────┐
-                    │  SQLite (zqlite) │       │    Ansible       │
-                    │  nodes, users,   │
-                    │  schedules,      │       │  (optional)      │
-                    │  creds, events   │       │  galaxy + plays  │
-                    └──────────────────┘       └─────────────────┘
+```mermaid
+graph TB
+    capsule["The Capsule<br/>React 19 + xterm.js"]
+    gc["Ground Control<br/>Zig + zap"]
+    spider["Spider · per node<br/>zero-dep static binary"]
+    db[("SQLite · zqlite<br/>nodes · users · creds<br/>schedules · events")]
+    ansible["Ansible · optional"]
+
+    capsule -->|"HTTPS + WSS"| gc
+    gc <-->|"WebSocket TLS — real-time telemetry"| spider
+    gc -->|"SSH — deploy · terminal · fleet · services<br/>processes · logs · security · containers · cron"| spider
+    gc --> db
+    gc -.-> ansible
 ```
 
 Ground Control is a **single Zig binary** that serves the embedded React frontend, exposes a REST API, and maintains persistent WebSocket connections to every Spider. Major Tom handles the full agent lifecycle — uploading binaries over SSH, installing systemd services, and managing credentials with AES-GCM-256 encryption.
@@ -122,6 +108,24 @@ When Ansible is detected on the host, **Ziggy** lights up — generating dynamic
 Spiders auto-detect and report: **OS** (name, version, ID), **kernel**, **architecture**, **CPU model & cores**, **total RAM**, and **package manager** (apt, dnf, yum, pacman, apk).
 
 ### Deployment (Major Tom)
+
+```mermaid
+sequenceDiagram
+    participant C as The Capsule
+    participant GC as Ground Control
+    participant N as Target Node
+    participant S as Spider
+
+    C->>GC: Add Node (host, SSH key, sudo pass)
+    GC->>N: SSH — test connectivity
+    GC->>N: SSH — detect arch (uname -m)
+    N-->>GC: x86_64 / aarch64
+    GC->>N: SCP — upload Spider binary
+    GC->>N: SSH — install systemd service
+    GC->>N: SSH — start stardust-spider.service
+    S->>GC: WebSocket — connect + auth token
+    GC-->>C: Node appears on dashboard
+```
 
 - **One-click onboarding** — SSH into a target, upload Spider binary, install systemd service, verify connection
 - **Clean teardown** — Stop service, uninstall unit, remove binary, wipe credentials from database
@@ -270,6 +274,18 @@ Spiders auto-detect and report: **OS** (name, version, ID), **kernel**, **archit
 - **Clean lifecycle** — Tags are automatically removed when a node is deleted
 
 ### Drift Detection
+
+```mermaid
+flowchart TD
+    snap["Take Snapshot via SSH"] --> collect["Capture: packages · services<br/>listening ports · system users"]
+    collect --> store[("Store in SQLite")]
+    store -->|"pin"| baseline["Set as Baseline"]
+    store -->|"compare"| diff["Diff Engine"]
+    baseline --> diff
+    diff --> added["Added — new items not in baseline"]
+    diff --> removed["Removed — items missing from current"]
+    diff --> drifted["Drifted — version or state changed"]
+```
 
 - **Configuration snapshots** — Capture installed packages, running services, listening ports, and system users via SSH
 - **Package manager auto-detection** — Uses the node's detected package manager (`apt`/`dpkg`, `dnf`/`yum`/`rpm`, `pacman`, `apk`) for accurate package listing
